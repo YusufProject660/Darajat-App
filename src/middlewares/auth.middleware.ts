@@ -1,18 +1,13 @@
 import { Request as ExpressRequest, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { Types } from 'mongoose';
 import { config } from '../config/env';
-import User from '../modules/users/user.model';
-
-// Define the shape of the authenticated user data
-export interface AuthUser {
-  _id: string;
-  role: 'player' | 'admin';
-}
+import User, { IUser } from '../modules/users/user.model';
 
 // Extend the Express Request type
 declare global {
   namespace Express {
-    interface User extends AuthUser {}
+    interface User extends IUser {}
     
     interface Request {
       user?: User;
@@ -23,10 +18,16 @@ declare global {
 // Type guard to check if the user is authenticated
 declare module 'express-serve-static-core' {
   interface Request {
-    user?: AuthUser;
+    user?: IUser;
   }
 }
 
+// For backward compatibility
+export type AuthUser = IUser;
+
+/**
+ * Middleware to authenticate user using JWT token
+ */
 /**
  * Middleware to authenticate user using JWT token
  */
@@ -35,47 +36,36 @@ export const protect = async (
   res: Response,
   next: NextFunction
 ) => {
-  try {
+  // Get token from header
+  let token;
+  
+  if (req.headers.authorization?.startsWith('Bearer')) {
     // Get token from header
-    let token;
+    token = req.headers.authorization.split(' ')[1];
+  }
+  
+  // Check if token exists
+  if (!token) {
+    return res.status(401).json({ message: 'Not authorized, no token' });
+  }
+
+  try {
+    // Verify token
+    const decoded = jwt.verify(token, config.jwtSecret) as { id: string };
     
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      // Get token from header
-      token = req.headers.authorization.split(' ')[1];
-    }
-    
-    // Check if token exists
-    if (!token) {
-      res.status(401);
-      throw new Error('Not authorized, no token');
+    // Get user from the token
+    const user = await User.findById(new Types.ObjectId(decoded.id)).select('-password');
+
+    if (!user) {
+      return res.status(401).json({ message: 'User not found' });
     }
 
-    try {
-      // Verify token
-      const decoded = jwt.verify(token, config.jwtSecret) as { id: string };
-      
-      // Get user from the token
-      const user = await User.findById(decoded.id).select('-password');
-
-      if (!user) {
-        res.status(401);
-        throw new Error('Not authorized, user not found');
-      }
-
-      // Set user on request object with proper typing
-      const authUser: AuthUser = {
-        _id: user._id.toString(),
-        role: user.role
-      };
-      req.user = authUser;
-      next();
-    } catch (error) {
-      console.error('Token verification error:', error);
-      res.status(401);
-      throw new Error('Not authorized, token failed');
-    }
+    // Convert to plain object and explicitly type it as IUser
+    req.user = user.toObject() as IUser;
+    return next();
   } catch (error) {
-    next(error);
+    console.error('Token verification error:', error);
+    return res.status(401).json({ message: 'Not authorized, token failed' });
   }
 };
 

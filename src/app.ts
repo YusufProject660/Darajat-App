@@ -6,11 +6,12 @@ import helmet from 'helmet';
 import xss from 'xss-clean';
 import rateLimit from 'express-rate-limit';
 import hpp from 'hpp';
-import session from 'express-session';  // ✅ ADD THIS
+import session from 'express-session';
 import { config } from './config/env';
 import { connectDB } from './config/db';
-import passport from './config/passport';  // ✅ ADD THIS - MUST BE BEFORE ROUTES
+import passport from './config/passport';
 import authRoutes from './modules/users/auth.routes';
+import gameRoutes from './modules/games/game.routes';
 import { errorHandler, notFound } from './utils/errorResponse';
 
 class App {
@@ -43,7 +44,7 @@ class App {
     this.app.use(express.json({ limit: '10kb' }));
     this.app.use(cookieParser());
     
-    // ✅ ADD SESSION MIDDLEWARE (REQUIRED FOR PASSPORT)
+    // Session middleware (required for Passport)
     this.app.use(
       session({
         secret: config.jwtSecret,
@@ -57,7 +58,7 @@ class App {
       })
     );
     
-    // ✅ ADD PASSPORT INITIALIZATION
+    // Passport initialization
     this.app.use(passport.initialize());
     this.app.use(passport.session());
     
@@ -79,6 +80,7 @@ class App {
     });
     
     this.app.use('/api/auth', authRoutes);
+    this.app.use('/api/game', gameRoutes);
     
     this.app.use((_req: Request, res: Response) => {
       res.status(404).json({ message: 'Not Found' });
