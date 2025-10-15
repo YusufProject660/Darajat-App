@@ -154,16 +154,99 @@ export const createGame = async (req: IRequestWithUser, res: Response, next: Nex
  * @route   GET /api/game/room/:code
  * @access  Private
  */
+/**
+ * @desc    Join an existing game room
+ * @route   POST /api/game/join
+ * @access  Private
+ */
+export const joinGame = async (req: IRequestWithUser, res: Response, next: NextFunction) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  
+  try {
+    if (!req.user) {
+      return next(new ErrorResponse('User not authenticated', 401));
+    }
+
+    const { roomCode } = req.body;
+    const userId = req.user._id;
+    const username = req.user.username;
+    const avatar = req.user.avatar;
+
+    // Find the game room
+    const gameRoom = await GameRoom.findOne({ roomCode }).session(session);
+    
+    if (!gameRoom) {
+      await session.abortTransaction();
+      return next(new ErrorResponse('Invalid room code or game not available', 404));
+    }
+
+    // Check if game is joinable
+    if (gameRoom.status !== 'waiting') {
+      await session.abortTransaction();
+      return next(new ErrorResponse('Game is not accepting new players', 400));
+    }
+
+    // Check if already joined
+    const alreadyJoined = gameRoom.players.some(
+      player => player.userId.toString() === userId.toString()
+    );
+
+    if (alreadyJoined) {
+      await session.abortTransaction();
+      return next(new ErrorResponse('You have already joined this game', 400));
+    }
+
+    // Check if room is full
+    if (gameRoom.players.length >= gameRoom.settings.maximumPlayers) {
+      await session.abortTransaction();
+      return next(new ErrorResponse('Game room is full', 400));
+    }
+
+    // Add player to the game
+    gameRoom.players.push({
+      userId,
+      username,
+      avatar,
+      score: 0,
+      isHost: false
+    });
+
+    await gameRoom.save({ session });
+    await session.commitTransaction();
+
+    // Format the response
+    const response = {
+      success: true,
+      message: 'Joined the game successfully',
+      game: {
+        roomCode: gameRoom.roomCode,
+        categories: gameRoom.settings.categories,
+        numberOfQuestions: gameRoom.settings.numberOfQuestions,
+        players: gameRoom.players.map(player => ({
+          username: player.username,
+          avatar: player.avatar
+        })),
+        status: gameRoom.status
+      }
+    };
+
+    res.status(201).json(response);
+  } catch (error) {
+    await session.abortTransaction();
+    next(error);
+  } finally {
+    session.endSession();
+  }
+};
+
 export const getGameRoom = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { code } = req.params;
-    
-    const gameRoom = await GameRoom.findOne({ roomCode: code.toUpperCase() })
-      .select('-__v')
-      .populate({
-        path: 'players.userId',
-        select: 'username avatar'
-      });
+
+    const gameRoom = await GameRoom.findOne({ roomCode: code })
+      .select('-questions') // Don't send questions in the initial room data
+      .lean();
 
     if (!gameRoom) {
       return next(new ErrorResponse('Game room not found', 404));
@@ -171,7 +254,7 @@ export const getGameRoom = async (req: Request, res: Response, next: NextFunctio
 
     res.status(200).json({
       success: true,
-      game: gameRoom
+      data: gameRoom
     });
   } catch (error) {
     next(error);

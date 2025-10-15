@@ -75,8 +75,23 @@ const handleValidationErrors: RequestHandler = (req: Request, res: Response, nex
   next();
 };
 
+// Join game validations
+const joinGameValidations: ValidationChain[] = [
+  body('roomCode')
+    .exists().withMessage('Room code is required')
+    .isString().withMessage('Room code must be a string')
+    .trim()
+    .isLength({ min: 4, max: 10 }).withMessage('Room code must be between 4 and 10 characters')
+    .toUpperCase()
+];
+
 // Export as an array of middleware functions
 export const validateCreateGame: (ValidationChain | RequestHandler)[] = [
   ...createGameValidations,
+  handleValidationErrors
+];
+
+export const validateJoinGame: (ValidationChain | RequestHandler)[] = [
+  ...joinGameValidations,
   handleValidationErrors
 ];
