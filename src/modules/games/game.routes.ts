@@ -1,7 +1,7 @@
 import express from 'express';
 import { protect } from '../../middlewares/auth.middleware';
 import { validateCreateGame, validateJoinGame } from './validations/game.validations';
-import { createGame, getGameRoom, joinGame } from './game.controller';
+import { createGame, getGameRoom, joinGame ,getGameLobby} from './game.controller';
 
 const router = express.Router();
 
@@ -25,5 +25,11 @@ router.post('/join', protect, validateJoinGame, joinGame);
  * @access  Private
  */
 router.get('/room/:code', protect, getGameRoom);
+/**
+ * @route   GET /api/game/lobby/:roomCode
+ * @desc    Get game lobby details by room code
+ * @access  Private
+ */
+router.get('/lobby/:roomCode', protect, getGameLobby);
 
 export default router;

@@ -260,3 +260,54 @@ export const getGameRoom = async (req: Request, res: Response, next: NextFunctio
     next(error);
   }
 };
+export const getGameLobby = async (req: IRequestWithUser, res: Response, next: NextFunction) => {
+  try {
+    const { roomCode } = req.params;
+    
+    if (!roomCode) {
+      return next(new ErrorResponse('Room code is required', 400));
+    }
+
+    const gameRoom = await GameRoom.findOne({ roomCode })
+      .populate('players.userId', 'username avatar')
+      .select('-questions -results -__v')
+      .lean();
+
+    if (!gameRoom) {
+      return next(new ErrorResponse('Game room not found or expired', 404));
+    }
+
+    // Get the first enabled category and its difficulty
+    const enabledCategories = Object.entries(gameRoom.settings.categories)
+      .filter(([_, settings]) => settings.enabled)
+      .map(([category, settings]) => ({ category, difficulty: settings.difficulty }));
+
+    const firstCategory = enabledCategories[0] || { category: 'General', difficulty: 'medium' };
+
+    // Prepare the response
+    const response = {
+      success: true,
+      game: {
+        roomCode: gameRoom.roomCode,
+        gameName: gameRoom.settings.gameName || 'Trivia Game',
+        description: gameRoom.settings.description || 'Test your knowledge!',
+        hostId: gameRoom.hostId,
+        category: firstCategory.category,
+        difficulty: firstCategory.difficulty,
+        numberOfQuestions: gameRoom.settings.numberOfQuestions,
+        timer: gameRoom.settings.timer || '30s',
+        playersLimit: gameRoom.settings.maximumPlayers,
+        players: gameRoom.players.map(player => ({
+          userId: player.userId._id,
+          username: player.username || (player.userId as any).username,
+          avatar: player.avatar || (player.userId as any).avatar
+        })),
+        status: gameRoom.status
+      }
+    };
+
+    res.status(200).json(response);
+  } catch (error) {
+    next(error);
+  }
+};
