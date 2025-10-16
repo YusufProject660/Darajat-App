@@ -76,7 +76,5 @@ const gameRoomSchema = new Schema<IGameRoom>({
   createdAt: { type: Date, default: Date.now }
 });
 
-// Index for faster querying
-gameRoomSchema.index({ roomCode: 1 }, { unique: true });
-
+// No need for explicit index as we already have unique: true in the schema
 export const GameRoom = mongoose.model<IGameRoom>('GameRoom', gameRoomSchema);

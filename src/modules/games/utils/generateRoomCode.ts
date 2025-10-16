@@ -1,18 +1,27 @@
-import { GameRoom } from '../models/gameRoom.model';
-
 const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Excluded similar looking characters
 const CODE_LENGTH = 5;
 
 /**
- * Generates a unique room code that doesn't exist in the database
- * @returns Promise<string> A unique room code
+ * Generates a random room code
+ * @returns string A random room code
  */
+export const generateRoomCode = (): string => {
+  let result = '';
+  const charactersLength = CHARS.length;
+  
+  for (let i = 0; i < CODE_LENGTH; i++) {
+    result += CHARS.charAt(Math.floor(Math.random() * charactersLength));
+  }
+  
+  return result;
+};
+
 export const generateUniqueRoomCode = async (): Promise<string> => {
   const maxAttempts = 10;
   let attempts = 0;
   
   while (attempts < maxAttempts) {
-    const code = generateRandomCode();
+    const code = generateRoomCode();
     const exists = await GameRoom.exists({ roomCode: code });
     
     if (!exists) {
@@ -28,19 +37,4 @@ export const generateUniqueRoomCode = async (): Promise<string> => {
   }
   
   throw new Error('Failed to generate a unique room code after multiple attempts');
-};
-
-/**
- * Generates a random room code
- * @returns string A random room code
- */
-const generateRandomCode = (): string => {
-  let result = '';
-  const charsLength = CHARS.length;
-  
-  for (let i = 0; i < CODE_LENGTH; i++) {
-    result += CHARS.charAt(Math.floor(Math.random() * charsLength));
-  }
-  
-  return result;
 };

@@ -1,4 +1,5 @@
-import express, { Application, Request, Response, NextFunction } from 'express';
+import express, { Application, Request, Response } from 'express';
+import http from 'http';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -7,98 +8,138 @@ import xss from 'xss-clean';
 import rateLimit from 'express-rate-limit';
 import hpp from 'hpp';
 import session from 'express-session';
+import { Server as SocketIOServer, Socket } from 'socket.io';
 import { config } from './config/env';
 import { connectDB } from './config/db';
 import passport from './config/passport';
 import authRoutes from './modules/users/auth.routes';
 import gameRoutes from './modules/games/game.routes';
+import { createWebSocketRouter } from './modules/games/websocket.routes';
 import { errorHandler, notFound } from './utils/errorResponse';
 
-class App {
+export class App {
   public app: Application;
+  public server: http.Server;
+  public io?: SocketIOServer;
+  private port: string | number;
 
   constructor() {
     this.app = express();
+    this.server = http.createServer(this.app);
+    this.port = config.port || 5000;
     
+    // Initialize database connection
     connectDB();
+    
+    // Initialize middlewares
     this.initializeMiddlewares();
+    
+    // Initialize routes
     this.initializeRoutes();
+    
+    // Initialize error handling
     this.initializeErrorHandling();
   }
-
+  
   private initializeMiddlewares() {
-    this.app.use(helmet());
+    // Enable CORS
     this.app.use(cors({
-      origin: config.clientUrl,
+      origin: config.clientUrl || '*',
       credentials: true
     }));
+
+    // Parse JSON and URL-encoded bodies
+    this.app.use(express.json());
+    this.app.use(express.urlencoded({ extended: true }));
+
+    // Security middlewares
+    this.app.use(mongoSanitize());
+    this.app.use(helmet());
+    this.app.use(xss());
     
-    this.app.set('trust proxy', 1);
-    
+    // Rate limiting
     const limiter = rateLimit({
-      windowMs: 10 * 60 * 1000,
+      windowMs: 10 * 60 * 1000, // 10 minutes
       max: 100
     });
     this.app.use(limiter);
     
-    this.app.use(express.json({ limit: '10kb' }));
+    this.app.use(hpp());
     this.app.use(cookieParser());
-    
-    // Session middleware (required for Passport)
-    this.app.use(
-      session({
-        secret: config.jwtSecret,
-        resave: false,
-        saveUninitialized: false,
-        cookie: {
-          secure: config.nodeEnv === 'production',
-          httpOnly: true,
-          maxAge: 24 * 60 * 60 * 1000 // 24 hours
-        }
-      })
-    );
-    
-    // Passport initialization
+
+    // Session configuration
+    this.app.use(session({
+      secret: config.jwtSecret, // Using JWT secret for session
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        secure: process.env.NODE_ENV === 'production',
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000 // 1 day
+      }
+    }));
+
+    // Initialize passport
     this.app.use(passport.initialize());
     this.app.use(passport.session());
-    
-    this.app.use(mongoSanitize());
-    this.app.use(xss());
-    this.app.use(hpp());
-    
-    if (config.nodeEnv === 'development') {
-      this.app.use((req: Request, _res: Response, next: NextFunction) => {
-        console.log(`${req.method} ${req.originalUrl}`);
-        next();
-      });
-    }
   }
-
+  
   private initializeRoutes() {
-    this.app.get('/api/health', (_req: Request, res: Response) => {
-      res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
-    });
-    
+    // API routes
     this.app.use('/api/auth', authRoutes);
-    this.app.use('/api/game', gameRoutes);
+    this.app.use('/api/games', gameRoutes);
     
-    this.app.use((_req: Request, res: Response) => {
-      res.status(404).json({ message: 'Not Found' });
+    // Health check endpoint
+    this.app.get('/health', (req, res) => {
+      res.status(200).json({ status: 'ok' });
     });
   }
-
+  
   private initializeErrorHandling() {
+    // 404 handler
     this.app.use(notFound);
+    
+    // Global error handler
     this.app.use(errorHandler);
   }
-
-  public listen() {
-    const PORT = config.port || 5000;
-    this.app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-      console.log(`Environment: ${config.nodeEnv}`);
+  
+  public initializeWebSocket(): void {
+    // Initialize Socket.IO with proper CORS and path
+    this.io = new SocketIOServer(this.server, {
+      cors: {
+        origin: config.clientUrl || '*',
+        methods: ['GET', 'POST'],
+        credentials: true
+      },
+      path: '/ws/socket.io'
     });
+
+    // Initialize WebSocket event handlers
+    this.initializeWebSocketHandlers();
+  }
+  
+  private initializeWebSocketHandlers(): void {
+    if (!this.io) return;
+    
+    // Initialize the proper websocket routes
+    createWebSocketRouter(this.io);
+  }
+  
+  public listen() {
+    this.server.listen(this.port, () => {
+      console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${this.port}`);
+      this.initializeWebSocket();
+      console.log(`WebSocket server running on ws://localhost:${this.port}/ws`);
+    });
+  }
+
+  public getServer() {
+    return this.server;
+  }
+
+  public getIO() {
+    return this.io;
   }
 }
 
-export default new App();
+export default App;
