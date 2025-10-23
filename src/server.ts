@@ -1,4 +1,5 @@
 import http from 'http';
+
 import { App } from './app';
 import { config } from './config/env';
 import { connectDB } from './config/db';
@@ -37,6 +38,8 @@ const shutdown = (server: http.Server) => {
 
 // Start the server
 const server = startServer();
+
+
 
 // Handle process termination
 process.on('SIGTERM', () => server.then(s => shutdown(s)));

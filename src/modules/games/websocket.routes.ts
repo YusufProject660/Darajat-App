@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { Server as SocketIOServer, Socket } from 'socket.io';
-// import { Question } from '../games/models/question.model';
+import mongoose from 'mongoose';
+import { Question } from './models/question.model';
+import { Deck } from './models/deck.model';
 
 interface Player {
   socketId: string;
@@ -24,74 +26,54 @@ interface RoomState {
 // In-memory store for game rooms
 const gameRooms = new Map<string, RoomState>();
 
-// Sample questions - in a real app, you'd fetch these from a database
-const SAMPLE_QUESTIONS: any[] = [
-  {
-    id: '1',
-    question: 'What is the capital of France?',
-    options: ['London', 'Berlin', 'Paris', 'Madrid'],
-    correctAnswer: 2,
-    category: 'geography',
-    difficulty: 'easy'
-  },
-  {
-    id: '2',
-    question: 'Which planet is known as the Red Planet?',
-    options: ['Venus', 'Mars', 'Jupiter', 'Saturn'],
-    correctAnswer: 1,
-    category: 'science',
-    difficulty: 'easy'
-  },
-  {
-    id: '3',
-    question: 'What is 2 + 2?',
-    options: ['3', '4', '5', '6'],
-    correctAnswer: 1,
-    category: 'math',
-    difficulty: 'easy'
-  },
-  {
-    id: '4',
-    question: 'Who painted the Mona Lisa?',
-    options: ['Vincent van Gogh', 'Pablo Picasso', 'Leonardo da Vinci', 'Michelangelo'],
-    correctAnswer: 2,
-    category: 'art',
-    difficulty: 'medium'
-  },
-  {
-    id: '5',
-    question: 'What is the largest mammal in the world?',
-    options: ['African Elephant', 'Blue Whale', 'Giraffe', 'Polar Bear'],
-    correctAnswer: 1,
-    category: 'science',
-    difficulty: 'easy'
-  }
-];
+// Fetch questions from MongoDB by deck/category/difficulty with random sampling
+async function fetchQuestionsFromDB(params: {
+  deckIds: string[];
+  category?: string; // 'all' by default
+  difficulty?: 'easy' | 'medium' | 'hard' | 'all';
+  limit?: number; // default 10
+}): Promise<any[]> {
+  const { deckIds, category = 'all', difficulty = 'all', limit = 10 } = params;
 
-/**
- * Fetches questions based on categories and count
- * In a real app, this would query a database or external API
- */
-async function fetchQuestions(categories: string[] = ['general'], count: number = 5): Promise<any[]> {
-  console.log(`Fetching ${count} questions for categories:`, categories);
-  
-  // Filter questions by category if specified
-  let filteredQuestions = SAMPLE_QUESTIONS;
-  if (categories && categories.length > 0 && !categories.includes('all')) {
-    filteredQuestions = SAMPLE_QUESTIONS.filter(q => 
-      q.category && categories.includes(q.category)
-    );
+  if (!deckIds || deckIds.length === 0) {
+    throw new Error('deckIds are required');
   }
-  
-  // If no questions match the filter, return some general questions
-  if (filteredQuestions.length === 0) {
-    console.log('No questions found for categories, returning general questions');
-    filteredQuestions = SAMPLE_QUESTIONS;
+
+  const match: any = {
+    deckId: { $in: deckIds.map((id) => new mongoose.Types.ObjectId(id)) }
+  };
+
+  if (category && category !== 'all') {
+    match.category = category;
   }
-  
-  // Shuffle and take the requested number of questions
-  const shuffled = [...filteredQuestions].sort(() => 0.5 - Math.random());
-  return shuffled.slice(0, Math.min(count, shuffled.length));
+  if (difficulty && difficulty !== 'all') {
+    match.difficulty = difficulty;
+  }
+
+  const pipeline: any[] = [
+    { $match: match },
+    { $sample: { size: Math.max(1, limit) } },
+    {
+      $project: {
+        _id: 1,
+        text: 1,
+        options: 1,
+        correctAnswer: 1,
+        category: 1,
+        difficulty: 1
+      }
+    }
+  ];
+
+  const results = await Question.aggregate(pipeline).exec();
+  return results.map((q: any) => ({
+    id: String(q._id),
+    text: q.text,
+    options: q.options,
+    correctAnswer: q.correctAnswer,
+    category: q.category,
+    difficulty: q.difficulty
+  }));
 }
 
 // Helper function to get room state for clients
@@ -151,6 +133,36 @@ export function createWebSocketRouter(io: SocketIOServer) {
         connected: false,
         message: 'Error checking socket service status'
       });
+    }
+  });
+
+  // List decks endpoint (so clients can fetch deckIds without remembering them)
+  router.get('/decks', async (req, res) => {
+    try {
+      const { category, difficulty, status } = (req.query || {}) as Record<string, string | undefined>;
+
+      const filter: any = {};
+      if (typeof status === 'string' && status.length > 0) {
+        filter.status = status;
+      } else {
+        filter.status = 'active';
+      }
+      if (typeof category === 'string' && category !== 'all' && category.length > 0) {
+        filter.category = category;
+      }
+      if (typeof difficulty === 'string' && difficulty !== 'all' && difficulty.length > 0) {
+        filter.difficulty = difficulty;
+      }
+
+      const decks = await Deck.find(filter)
+        .select('_id name category difficulty status questionCount createdAt')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      res.json({ success: true, decks });
+    } catch (error) {
+      console.error('Error fetching decks:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch decks' });
     }
   });
 
@@ -290,6 +302,8 @@ export function createWebSocketRouter(io: SocketIOServer) {
           });
         }
 
+        const resolvedRoomCode = actualRoomCode as string;
+
         // Check if game has started
         if (room.isStarted) {
           console.error(`[${requestId}] Game already started in room: ${actualRoomCode}`);
@@ -329,13 +343,13 @@ export function createWebSocketRouter(io: SocketIOServer) {
 
         try {
           // Join the room
-          await socket.join(actualRoomCode);
+          await socket.join(resolvedRoomCode);
           room.players.push(player);
 
           // Store player data in socket
           socket.data = {
             playerId: player.userId,
-            roomCode: actualRoomCode,
+            roomCode: resolvedRoomCode,
             isHost: false,
             username: player.username,
             requestId
@@ -345,7 +359,7 @@ export function createWebSocketRouter(io: SocketIOServer) {
           const roomState = getRoomStateForClients(room);
 
           // Notify all clients in the room
-          io.to(actualRoomCode).emit('player_joined', {
+          io.to(resolvedRoomCode).emit('player_joined', {
             player: {
               id: player.userId,
               username: player.username,
@@ -356,12 +370,12 @@ export function createWebSocketRouter(io: SocketIOServer) {
             timestamp: new Date().toISOString()
           });
 
-          console.log(`[${requestId}] Player ${player.userId} joined room ${actualRoomCode}`);
+          console.log(`[${requestId}] Player ${player.userId} joined room ${resolvedRoomCode}`);
 
           // Send success response
           callback({
             success: true,
-            roomCode: actualRoomCode,
+            roomCode: resolvedRoomCode,
             isHost: false,
             players: roomState.players,
             isStarted: room.isStarted,
@@ -440,10 +454,14 @@ export function createWebSocketRouter(io: SocketIOServer) {
     });
 
     // Handle starting the game
-    socket.on('start_game', async (data: { roomCode: string; categories?: string[]; questionCount?: number }, callback: Function) => {
+    socket.on('start_game', async (data: { roomCode: string; deckIds?: string[]; category?: string; difficulty?: 'easy' | 'medium' | 'hard' | 'all'; limit?: number; questionCount?: number }, callback: Function) => {
       console.log('start_game event received:', data);
       try {
-        const { roomCode, categories = ['easy'], questionCount = 3 } = data;
+        const { roomCode } = data;
+        let deckIds = data.deckIds || [];
+        const category = data.category ?? 'all';
+        const difficulty = (data.difficulty as any) ?? 'all';
+        const limit = (typeof data.questionCount === 'number' ? data.questionCount : data.limit) ?? 10;
         console.log('Processing start_game for room:', roomCode);
         console.log('Available rooms:', Array.from(gameRooms.keys()));
         
@@ -490,17 +508,46 @@ export function createWebSocketRouter(io: SocketIOServer) {
           });
         }
 
+        // If deckIds not provided, derive from category/difficulty
+        if ((!deckIds || deckIds.length === 0) && (category !== 'all' || difficulty !== 'all')) {
+          const deckFilter: any = { status: 'active' };
+          if (category !== 'all') deckFilter.category = category;
+          if (difficulty !== 'all') deckFilter.difficulty = difficulty;
+          const decks = await Deck.find(deckFilter).select('_id').lean();
+          deckIds = decks.map(d => String(d._id));
+        }
+
+        // Validate required filters
+        if (!deckIds || deckIds.length === 0) {
+          return callback({ success: false, error: 'No decks found for selected filters', details: { category, difficulty } });
+        }
+
+        // Load questions from the database
+        const questions = await fetchQuestionsFromDB({
+          deckIds,
+          category,
+          difficulty: (['easy','medium','hard','all'] as const).includes(difficulty as any) ? (difficulty as any) : 'all',
+          limit
+        });
+
+        if (!questions.length) {
+          return callback({
+            success: false,
+            error: 'No questions found for the selected filters',
+            details: { deckIds, category, difficulty, limit }
+          });
+        }
+
         // Start the game
         room.isStarted = true;
         room.currentQuestionIndex = 0;
-        
-        // Generate questions for the game
-        room.questions = SAMPLE_QUESTIONS.slice(0, questionCount);
+        room.questions = questions;
         
         // Notify all players that the game has started
         io.to(roomCode).emit('game_started', {
           roomCode,
-          questionCount,
+          questionCount: room.questions.length,
+          totalQuestions: room.questions.length,
           players: room.players.map(p => ({
             id: p.userId,
             username: p.username,
@@ -516,7 +563,8 @@ export function createWebSocketRouter(io: SocketIOServer) {
           success: true,
           message: 'Game started successfully',
           roomCode,
-          questionCount
+          questionCount: room.questions.length,
+          totalQuestions: room.questions.length
         });
         
       } catch (error) {

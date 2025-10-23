@@ -164,6 +164,26 @@
   <div id="gameControls" style="display: none; margin-bottom: 20px;">
     <div id="gameStatus" style="margin-bottom: 10px; font-weight: bold;">Waiting for players...</div>
     
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px;">
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <label for="categorySelect" style="font-size: 12px; color: #555;">Select Category</label>
+        <select id="categorySelect" multiple size="6" style="min-width: 200px;">
+          <!-- dynamically populated from /api/decks -->
+        </select>
+      </div>
+      <select id="difficultySelect" style="padding: 8px;">
+        <option value="all" selected>All Difficulties</option>
+        <option value="easy">Easy</option>
+        <option value="medium">Medium</option>
+        <option value="hard">Hard</option>
+      </select>
+      <input type="number" id="questionCountInput" min="1" max="50" value="10" style="width: 100px;" />
+      <div style="display:flex; align-items:center; gap:6px;">
+        <span style="color:#555;">Players joined:</span>
+        <span id="playerCount" style="font-weight:bold;">0</span>
+      </div>
+    </div>
+    
     <button id="startGameBtn"  onclick={startGame}>Start Game</button>
   </div>
   
@@ -233,8 +253,15 @@
       roomControls: document.getElementById('roomControls'),
       roomCodeDisplay: document.getElementById('roomCodeDisplay'),
       roomCode: document.getElementById('roomCode'),
-      copyRoomCodeBtn: document.getElementById('copyRoomCode')
+      copyRoomCodeBtn: document.getElementById('copyRoomCode'),
+      categorySelect: document.getElementById('categorySelect'),
+      difficultySelect: document.getElementById('difficultySelect'),
+      questionCountInput: document.getElementById('questionCountInput')
     };
+
+    // Cache decks fetched from backend
+    let availableDecks = [];
+    let currentPlayerCount = 0;
 
     // Helper function to safely get DOM elements
     function getElement(id) {
@@ -258,12 +285,16 @@
     function updateButtonStates() {
       const nameEntered = elements.playerName?.value.trim().length > 0;
       const roomIdEntered = elements.roomId?.value.trim().length > 0;
+      const categorySelected = !!elements.categorySelect && elements.categorySelect.selectedOptions.length > 0;
       
       if (elements.createRoomBtn) {
         elements.createRoomBtn.disabled = !(socket?.connected && nameEntered);
       }
       if (elements.joinRoomBtn) {
         elements.joinRoomBtn.disabled = !(socket?.connected && nameEntered && roomIdEntered);
+      }
+      if (elements.startGameBtn) {
+        elements.startGameBtn.disabled = !(socket?.connected && isHost && categorySelected);
       }
     }
 
@@ -338,6 +369,9 @@
       if (elements.createRoomBtn) elements.createRoomBtn.disabled = true;
       if (elements.leaveRoomBtn) elements.leaveRoomBtn.disabled = true;
       if (elements.startGameBtn) elements.startGameBtn.disabled = true;
+      const pc = document.getElementById('playerCount');
+      if (pc) pc.textContent = '0';
+      currentPlayerCount = 0;
     }
 
     function startTimer() {
@@ -384,6 +418,64 @@
         answer: answer,
         questionIndex: currentQuestionIndex
       });
+    }
+
+    async function fetchAndPopulateDecks() {
+      const base = elements.serverUrl?.value.trim() || 'http://localhost:5000';
+      try {
+        // Load categories for the dropdown
+        const catRes = await fetch(`${base}/api/categories`, { credentials: 'include' });
+        const catJson = await catRes.json();
+        if (!catJson.success) throw new Error(catJson.message || 'Failed to fetch categories');
+        const categoryList = Array.isArray(catJson.categories) ? catJson.categories : [];
+
+        if (elements.categorySelect) {
+          elements.categorySelect.innerHTML = '';
+          const allOpt = document.createElement('option');
+          allOpt.value = 'all';
+          allOpt.textContent = 'All Categories';
+          elements.categorySelect.appendChild(allOpt);
+          categoryList.forEach((c) => {
+            const value = c._id || c.name || '';
+            if (!value) return;
+            const opt = document.createElement('option');
+            opt.value = String(value);
+            opt.textContent = (c.name || String(value)).toString();
+            elements.categorySelect.appendChild(opt);
+          });
+        }
+
+        // Also load decks for mapping to deckIds later
+        const deckRes = await fetch(`${base}/api/decks?status=all`, { credentials: 'include' });
+        const deckJson = await deckRes.json();
+        availableDecks = deckJson?.decks || [];
+
+        updateButtonStates();
+      } catch (e) {
+        console.error('Failed to load categories/decks:', e);
+        addMessage(`Failed to load categories: ${e.message}`, 'error');
+      }
+    }
+
+    elements.categorySelect?.addEventListener('change', updateButtonStates);
+    elements.difficultySelect?.addEventListener('change', updateButtonStates);
+
+    function deriveDeckIdsFromSelection() {
+      const selectedCategories = Array.from(elements.categorySelect?.selectedOptions || []).map(o => o.value);
+      const difficulty = elements.difficultySelect?.value || 'all';
+      if (selectedCategories.includes('all')) {
+        const filtered = availableDecks.filter(d => (difficulty === 'all' || d.difficulty === difficulty));
+        return filtered.map(d => d._id);
+      }
+      const filtered = availableDecks.filter(d => selectedCategories.includes(d.category) && (difficulty === 'all' || d.difficulty === difficulty));
+      return filtered.map(d => d._id);
+    }
+
+    function setPlayerCount(count) {
+      currentPlayerCount = count || 0;
+      const pc = document.getElementById('playerCount');
+      if (pc) pc.textContent = String(currentPlayerCount);
+      updateButtonStates();
     }
 
     function startGame() {
@@ -495,6 +587,8 @@
           updateButtonStates();
           
           addMessage('Successfully connected to server', 'system');
+          // Fetch available decks for selectors
+          fetchAndPopulateDecks();
         });
       } catch (error) {
         console.error('Connection failed:', error);
@@ -542,6 +636,9 @@
       if (data.room?.players) {
         updatePlayerList(data.room.players);
       }
+      if (data.room?.players) {
+        setPlayerCount(data.room.players.length);
+      }
     });
       
     socket.on('player_left', (data) => {
@@ -550,6 +647,9 @@
       // Update player list if available
       if (data.players) {
         updatePlayerList(data.players);
+      }
+      if (data.players) {
+        setPlayerCount(data.players.length);
       }
     });
     
@@ -583,6 +683,11 @@
         // Show game controls for host
         if (elements.gameControls) {
           elements.gameControls.style.display = 'block';
+        }
+
+        // Show room code (host only view after creation)
+        if (elements.roomCodeDisplay) {
+          elements.roomCodeDisplay.style.display = 'block';
         }
         
         // Update player list
@@ -625,7 +730,14 @@
         if (data.players) {
           updatePlayerList(data.players);
         }
+        if (data.players) {
+          setPlayerCount(data.players.length);
+        }
         
+        // Show room code only for host
+        if (elements.roomCodeDisplay) {
+          elements.roomCodeDisplay.style.display = data.isHost ? 'block' : 'none';
+        }
         // Show start button only for host
         if (elements.startGameBtn) {
           elements.startGameBtn.style.display = data.isHost ? 'block' : 'none';
@@ -876,6 +988,7 @@
             elements.gameStatus.textContent = `Waiting for players (${playerCount} connected)`;
           }
         }
+        setPlayerCount(data.players?.length || 0);
       });
     }
   
@@ -1087,10 +1200,18 @@ function joinRoom() {
         elements.gameStatus.textContent = 'Starting game...';
       }
       
+      const deckIds = deriveDeckIdsFromSelection();
+      const selectedCategories = Array.from(elements.categorySelect?.selectedOptions || []).map(o => o.value);
+      const category = selectedCategories.length === 1 ? selectedCategories[0] : undefined;
+      const difficulty = elements.difficultySelect?.value || 'all';
+      const questionCount = parseInt(elements.questionCountInput?.value || '10', 10);
+
       const gameConfig = {
         roomCode: currentRoom,
-        categories: ['easy'],
-        questionCount: 3
+        deckIds,
+        category,
+        difficulty,
+        questionCount
       };
       
       console.log('Emitting start_game event with config:', gameConfig);
@@ -1107,6 +1228,9 @@ function joinRoom() {
           console.error('Failed to start game:', response.error);
           if (elements.gameStatus) {
             elements.gameStatus.textContent = 'Error: ' + (response.error || 'Unknown error');
+          }
+          if (response.details) {
+            addMessage('Details: ' + JSON.stringify(response.details), 'error');
           }
         } else {
           console.log('Game started successfully');

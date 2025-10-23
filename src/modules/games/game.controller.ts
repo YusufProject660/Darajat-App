@@ -1,11 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
 import { ErrorResponse } from '../../utils/errorResponse';
 import { GameRoom } from './models/gameRoom.model';
 import { Deck } from './models/deck.model';
 import { Question } from './models/question.model';
 import { generateUniqueRoomCode } from './utils/generateRoomCode';
 import { IUser } from '../users/user.model';
-import mongoose from 'mongoose';
 
 interface IRequestWithUser extends Request {
   user?: IUser;
@@ -18,134 +18,236 @@ interface ICategorySettings {
   };
 }
 
+
+
 /**
  * @desc    Create a new game room
  * @route   POST /api/game/create
  * @access  Private
  */
+// In game.controller.ts, update the createGame function with this improved version:
+const toObjectId = (id: string | mongoose.Types.ObjectId) =>
+  typeof id === "string" ? new mongoose.Types.ObjectId(id) : id;
+
 export const createGame = async (req: IRequestWithUser, res: Response, next: NextFunction) => {
   try {
     if (!req.user) {
       return next(new ErrorResponse('User not authenticated', 401));
     }
 
-    const { categories, numberOfQuestions, maximumPlayers } = req.body;
-    console.log(categories, numberOfQuestions, maximumPlayers)
+    // Define valid difficulties
+    const validDifficulties = ['easy', 'medium', 'hard'] as const;
 
-    // Get enabled categories
-    const enabledCategories = Object.entries(categories as ICategorySettings)
-      .filter(([_, value]) => value.enabled)
-      .map(([category, settings]) => ({
-        category,
-        difficulty: settings.difficulty
-      }));
-      console.log("these are enabled category", enabledCategories)
+    // Case-insensitive destructuring of request body
+    const requestCategories = req.body.categories || req.body.Categories;
+    const { numberOfQuestions = 10, maximumPlayers = 4 } = req.body;
 
-    // Find active decks for the enabled categories and difficulties
-    const deckQueries = enabledCategories.map(({ category, difficulty }) => ({
-      category,
-      difficulty,
-      status: 'active'
-    }));
-    console.log("these are deck queries", deckQueries)
+    // Validate request
+    if (!requestCategories || Object.keys(requestCategories).length === 0) {
+      return next(new ErrorResponse('At least one category must be specified', 400));
+    }
+
+    // Process categories with case-insensitive matching
+    const enabledCategories = Object.entries(requestCategories)
+      .filter(([_, settings]) => {
+        const enabled = settings?.enabled || settings?.Enabled;
+        return enabled === true || enabled === 'true';
+      })
+      .map(([category, settings]) => {
+        const difficulty = (settings?.difficulty || settings?.Difficulty || 'easy').toLowerCase();
+        return {
+          category: category.trim(),
+          difficulty: validDifficulties.includes(difficulty as any) 
+            ? difficulty as 'easy' | 'medium' | 'hard' 
+            : 'easy'
+        };
+      });
+
+    if (enabledCategories.length === 0) {
+      return next(new ErrorResponse('No valid categories enabled', 400));
+    }
+
+    console.log('Processing categories:', enabledCategories);
+
+    // Get all decks for the requested categories
+    const categoryNames = enabledCategories.map(ec => ec.category);
     const decks = await Deck.find({
-      $or: deckQueries
-    });
+      $or: [
+        { category: { $in: categoryNames } },
+        { name: { $in: categoryNames } }
+      ]
+    }).lean();
 
     if (decks.length === 0) {
-      return next(new ErrorResponse('No active decks found for the selected categories', 400));
+      return next(new ErrorResponse('No decks found for the requested categories', 400));
     }
 
-    // Get deck IDs for the query
-    // const deckIds = decks.map(deck => deck._id);
+    console.log(`Found ${decks.length} decks for categories: ${categoryNames.join(', ')}`);
 
-    // Calculate questions per category (distribute questions evenly)
-    const questionsPerCategory = Math.ceil(numberOfQuestions / enabledCategories.length);
-    console.log("these are questions per category", questionsPerCategory)
-    // Get questions from each category
-    let questions: any[] = [];
-    console.log("these are decks", decks)
-    
+    // Group decks by category for easier access
+    const decksByCategory = decks.reduce((acc, deck) => {
+      const categories = [
+        deck.category?.toLowerCase(),
+        deck.name?.toLowerCase()
+      ].filter(Boolean) as string[];
+      
+      categories.forEach(cat => {
+        if (!acc[cat]) {
+          acc[cat] = [];
+        }
+        acc[cat].push(deck);
+      });
+      
+      return acc;
+    }, {} as Record<string, any[]>);
+
+    // First, collect all questions from all categories
+    let allQuestions: any[] = [];
+    const availableCategories: string[] = [];
+    const categoryQuestionMap: { [key: string]: any[] } = {};
+
+    // First pass: Get all available questions for each category
     for (const { category, difficulty } of enabledCategories) {
-      const categoryDecks = decks.filter(d => 
-        d.category == category && d.difficulty == difficulty
-      );
-      console.log("these are category decks", categoryDecks)
+      const categoryKey = category.toLowerCase();
+      const categoryDecks = decksByCategory[categoryKey];
       
-      // if (categoryDecks.length === 0) continue;
-      const rawdeckIds = categoryDecks.map(d => (d._id));
-      console.log("these are deck ids", rawdeckIds)
-      const deckIds = rawdeckIds.map(id => id.toString());
-      console.log("these are deck ids", deckIds)
-      
-      const categoryQuestions = await Question.aggregate([
+      if (!categoryDecks || categoryDecks.length === 0) {
+        console.warn(`No decks found for category: ${category}`);
+        continue;
+      }
+
+      const deckIds = categoryDecks.map(deck => deck._id.toString());
+      const queryDifficulty = difficulty.toLowerCase() as 'easy' | 'medium' | 'hard';
+
+      console.log(`Fetching questions for category: ${category}, difficulty: ${queryDifficulty}`);
+
+      // First try with exact difficulty
+      let questions = await Question.aggregate([
         { 
-          $match: { 
+          $match: {
             deckId: { $in: deckIds },
-            // difficulty: difficulty,
-            // status: 'active' // Ensure we only get active questions
+            difficulty: queryDifficulty,
+            category: { $regex: new RegExp(`^${category}$`, 'i') }
           } 
         },
-        // { $sample: { size: questionsPerCategory } }
-      ]);
-      console.log("these are category questions", categoryQuestions)
+        { $sample: { size: numberOfQuestions } }
+      ]).allowDiskUse(true);
+
+      // If not enough questions, try any difficulty
+      if (questions.length < numberOfQuestions) {
+        const moreQuestions = await Question.aggregate([
+          { 
+            $match: {
+              deckId: { $in: deckIds },
+              category: { $regex: new RegExp(`^${category}$`, 'i') },
+              _id: { $nin: questions.map(q => q._id) }
+            } 
+          },
+          { $sample: { size: numberOfQuestions - questions.length } }
+        ]).allowDiskUse(true);
+        
+        questions = [...questions, ...moreQuestions];
+      }
+
+      if (questions.length > 0) {
+        categoryQuestionMap[category] = questions;
+        allQuestions = [...allQuestions, ...questions];
+        availableCategories.push(category);
+        console.log(`Found ${questions.length} questions for ${category}`);
+      } else {
+        console.warn(`No questions found for ${category} in any deck`);
+      }
+    }
+
+    // If no questions found in any category, return error
+    if (allQuestions.length === 0) {
+      return next(new ErrorResponse('No questions found in any of the selected categories', 400));
+    }
+
+    // Distribute questions fairly among categories
+    const finalQuestions: any[] = [];
+    const questionsPerCategory = Math.ceil(numberOfQuestions / availableCategories.length);
+    
+    // Take questions from each category in a round-robin fashion
+    for (let i = 0; i < questionsPerCategory; i++) {
+      for (const category of availableCategories) {
+        if (categoryQuestionMap[category] && categoryQuestionMap[category].length > 0) {
+          const question = categoryQuestionMap[category].pop();
+          finalQuestions.push(question);
+          
+          // Stop if we have enough questions
+          if (finalQuestions.length >= numberOfQuestions) {
+            break;
+          }
+        }
+      }
       
-      questions = [...questions, ...categoryQuestions];
-    }
-    console.log("these are questions", questions)
-    // If we couldn't get enough questions, return an error
-    if (questions.length < numberOfQuestions) {
-      return next(new ErrorResponse('Not enough questions available for the selected categories', 400));
+      // Stop if we have enough questions
+      if (finalQuestions.length >= numberOfQuestions) {
+        break;
+      }
     }
 
-    // Limit to the requested number of questions
-    const selectedQuestions = questions.slice(0, numberOfQuestions);
-    const questionIds = selectedQuestions.map(q => q._id);
-    console.log("these are question ids", questionIds)
+    allQuestions = finalQuestions.slice(0, numberOfQuestions);
 
-    // Generate a unique room code
+    // Final check if we have enough questions
+    if (allQuestions.length < numberOfQuestions) {
+      const errorMessage = `Not enough questions available. Found ${allQuestions.length} out of ${numberOfQuestions} requested.\n` +
+        `Requested categories: ${enabledCategories.map(ec => `${ec.category} (${ec.difficulty})`).join(', ')}\n` +
+        (availableCategories.length > 0 
+          ? `Available categories with questions: ${availableCategories.join(', ')}` 
+          : 'No questions found in any category. Please check if the decks have questions.');
+      
+      return next(new ErrorResponse(errorMessage, 400));
+    }
+
+    // Shuffle and limit questions
+    const shuffledQuestions = allQuestions
+      .sort(() => 0.5 - Math.random())
+      .slice(0, numberOfQuestions);
+
+    // Create game room
     const roomCode = await generateUniqueRoomCode();
+    
+    // Format categories as a map
+    const categoriesMap = enabledCategories.reduce((acc, { category, difficulty }) => {
+      acc[category] = { enabled: true, difficulty };
+      return acc;
+    }, {} as Record<string, { enabled: boolean; difficulty: 'easy' | 'medium' | 'hard' }>);
 
-    // Create the game room
-    const gameRoom = await GameRoom.create({
-      hostId: req.user._id,
+    const gameRoom = new GameRoom({
       roomCode,
+      hostId: req.user._id,  // Using hostId instead of host to match schema
       players: [{
         userId: req.user._id,
         username: req.user.username,
-        avatar: req.user.avatar,
         isHost: true,
         score: 0
       }],
-      settings: {
-        numberOfQuestions,
-        maximumPlayers,
-        categories
-      },
-      questions: questionIds,
+      questions: shuffledQuestions.map(q => q._id), // Store only question IDs
+      currentQuestion: 0,
       status: 'waiting',
-      results: []
+      settings: {
+        categories: categoriesMap,
+        numberOfQuestions,
+        maximumPlayers
+      }
     });
 
-    // Populate the questions for the response
-    const populatedGameRoom = await GameRoom.findById(gameRoom._id)
-      .select('-__v')
-      .populate({
-        path: 'players.userId',
-        select: 'username avatar'
-      });
+    await gameRoom.save();
 
     res.status(201).json({
       success: true,
       message: 'Game room created successfully',
-      game: populatedGameRoom,
-      questions: selectedQuestions
-
-
-
+      data: {
+        roomCode,
+        questions: shuffledQuestions
+      }
     });
+
   } catch (error) {
-    next(error);
+    console.error('Error in createGame:', error);
+    next(new ErrorResponse('Failed to create game room', 500));
   }
 };
 
@@ -309,5 +411,89 @@ export const getGameLobby = async (req: IRequestWithUser, res: Response, next: N
     res.status(200).json(response);
   } catch (error) {
     next(error);
+  }
+};
+interface ILeaveGameRequest extends Request {
+  body: {
+    roomCode: string;
+  };
+  user?: IUser;
+}
+
+/**
+ * @desc    Leave a game room
+ * @route   POST /api/game/leave
+ * @access  Private
+ */
+export const leaveGame = async (req: ILeaveGameRequest, res: Response, next: NextFunction) => {
+  const { roomCode } = req.body;
+  const userId = req.user?._id;
+
+  if (!userId) {
+    return next(new ErrorResponse('User not authenticated', 401));
+  }
+
+  try {
+    // Find the game room by roomCode
+    const gameRoom = await GameRoom.findOne({ roomCode });
+
+    // Check if game room exists
+    if (!gameRoom) {
+      return res.status(404).json({
+        success: false,
+        message: 'Game room not found or already started.'
+      });
+    }
+
+    // Check if game has already started
+    if (gameRoom.status !== 'waiting') {
+      return res.status(400).json({
+        success: false,
+        message: 'Game room not found or already started.'
+      });
+    }
+
+    // Find player index in the game room
+    const playerIndex = gameRoom.players.findIndex(
+      player => player.userId.toString() === userId.toString()
+    );
+
+    // If player not found in the game
+    if (playerIndex === -1) {
+      return res.status(400).json({
+        success: false,
+        message: 'You are not in this game room.'
+      });
+    }
+
+    // Remove player from the game
+    gameRoom.players.splice(playerIndex, 1);
+
+    // If the leaving player was the host and there are other players, assign a new host
+    if (gameRoom.players.length > 0 && gameRoom.hostId.toString() === userId.toString()) {
+      gameRoom.hostId = gameRoom.players[0].userId;
+      gameRoom.players[0].isHost = true;
+    }
+
+    // If no players left, delete the game room
+    if (gameRoom.players.length === 0) {
+      await GameRoom.deleteOne({ _id: gameRoom._id });
+      return res.status(201).json({
+        success: true,
+        message: 'You have left the game room. The game room has been closed as it is now empty.'
+      });
+    }
+
+    // Save the updated game room
+    await gameRoom.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'You have left the game room successfully.'
+    });
+
+  } catch (error) {
+    console.error('Leave game error:', error);
+    next(new ErrorResponse('Failed to leave game room', 500));
   }
 };

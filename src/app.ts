@@ -44,9 +44,25 @@ export class App {
   private initializeMiddlewares() {
     // Enable CORS
     this.app.use(cors({
-      origin: config.clientUrl || '*',
+      origin: (origin, callback) => {
+        const allowed = [
+          'http://127.0.0.1:5500',
+          'http://localhost:5500',
+          'http://localhost:3000',
+          'http://localhost:5173',
+          config.clientUrl || undefined
+        ].filter(Boolean) as string[];
+        if (!origin || allowed.includes(origin)) {
+          return callback(null, true);
+        }
+        return callback(null, false);
+      },
       credentials: true
     }));
+
+    // If requests come through a proxy (e.g., live-server, nginx), trust it so req.ip is correct
+    // This prevents express-rate-limit from throwing when X-Forwarded-For is present
+    this.app.set('trust proxy', 1);
 
     // Parse JSON and URL-encoded bodies
     this.app.use(express.json());
@@ -60,7 +76,10 @@ export class App {
     // Rate limiting
     const limiter = rateLimit({
       windowMs: 10 * 60 * 1000, // 10 minutes
-      max: 100
+      max: 100,
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => req.ip || 'unknown'
     });
     this.app.use(limiter);
     
@@ -88,6 +107,54 @@ export class App {
     // API routes
     this.app.use('/api/auth', authRoutes);
     this.app.use('/api/games', gameRoutes);
+    // Decks listing endpoint for clients (supports filters)
+    this.app.get('/api/decks', async (req: Request, res: Response) => {
+      try {
+        const { Deck } = await import('./modules/games/models/deck.model');
+        const { category, difficulty, status } = (req.query || {}) as Record<string, string | undefined>;
+
+        const filter: any = {};
+        if (typeof status === 'string' && status.length > 0 && status !== 'all') {
+          filter.status = status;
+        } else {
+          filter.status = 'active';
+        }
+        if (typeof category === 'string' && category.length > 0 && category !== 'all') {
+          filter.category = category;
+        }
+        if (typeof difficulty === 'string' && difficulty.length > 0 && difficulty !== 'all') {
+          filter.difficulty = difficulty;
+        }
+
+        const decks = await Deck.find(filter)
+          .select('_id name category difficulty status questionCount createdAt')
+          .sort({ createdAt: -1 })
+          .lean();
+        res.json({ success: true, decks });
+      } catch (error: any) {
+        res.status(500).json({ success: false, message: 'Failed to fetch decks', error: error?.name || 'UnknownError' });
+      }
+    });
+
+    // Categories endpoint: returns unique categories from Decks
+    this.app.get('/api/categories', async (_req: Request, res: Response) => {
+      try {
+        const { Deck } = await import('./modules/games/models/deck.model');
+        const agg = await Deck.aggregate([
+          { $match: { status: 'active' } },
+          { $group: { _id: '$category' } },
+          { $sort: { _id: 1 } }
+        ]);
+        const categories = (agg || []).map((c: any) => ({
+          _id: c._id,
+          name: String(c._id).charAt(0).toUpperCase() + String(c._id).slice(1)
+        }));
+        return res.status(200).json({ success: true, categories });
+      } catch (err: any) {
+        const message = err?.name === 'MongooseServerSelectionError' ? 'Database connection failed' : 'Failed to fetch categories';
+        return res.status(500).json({ success: false, message, error: err?.name || 'UnknownError' });
+      }
+    });
     
     // Health check endpoint
     this.app.get('/health', (req, res) => {
