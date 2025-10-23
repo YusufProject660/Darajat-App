@@ -79,7 +79,11 @@ export class App {
       max: 100,
       standardHeaders: true,
       legacyHeaders: false,
-      keyGenerator: (req) => req.ip || 'unknown'
+      keyGenerator: (req) => {
+        // Handle IPv6 addresses properly
+        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        return Array.isArray(ip) ? ip[0] : ip?.split(',').shift()?.trim() || 'unknown';
+      }
     });
     this.app.use(limiter);
     

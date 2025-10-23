@@ -1,7 +1,14 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { protect } from '../../middlewares/auth.middleware';
 import { validateCreateGame, validateJoinGame } from './validations/game.validations';
-import { createGame, getGameRoom, joinGame ,getGameLobby, leaveGame} from './game.controller';
+import { 
+  createGame, 
+  getGameRoom, 
+  joinGame, 
+  getGameLobby, 
+  leaveGame,
+  getQuestions 
+} from './game.controller';
 
 const router = express.Router();
 
@@ -40,5 +47,12 @@ router.get('/lobby/:roomCode', protect, getGameLobby);
  * @access  Private
  */
 router.post('/leave', protect, leaveGame);
+
+/**
+ * @route   GET /api/game/questions/:roomCode
+ * @desc    Get all questions for a game room
+ * @access  Private
+ */
+router.get('/questions/:roomCode', protect, getQuestions);
 
 export default router;

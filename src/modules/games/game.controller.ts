@@ -425,6 +425,109 @@ interface ILeaveGameRequest extends Request {
  * @route   POST /api/game/leave
  * @access  Private
  */
+interface IGetQuestionsRequest extends Request {
+  params: {
+    roomCode: string;
+  };
+  user?: IUser;
+}
+
+/**
+ * @desc    Get all questions for a game room
+ * @route   GET /api/game/questions/:roomCode
+ * @access  Private
+ */
+export const getQuestions = async (req: IGetQuestionsRequest, res: Response, next: NextFunction) => {
+  try {
+    const { roomCode } = req.params;
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized - User not authenticated',
+      });
+    }
+
+    // Find the game room with populated questions
+   const gameRoom = await GameRoom.findOne({ roomCode })
+  .populate({
+    path: 'questions',
+    select: 'text question options correctAnswer explanation difficulty category timerInSeconds',
+    options: { lean: true }
+  });
+  
+
+    if (!gameRoom) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invalid room code or game not found.',
+      });
+    }
+
+    // Check if user is a participant in this room
+    const isParticipant = gameRoom.players.some(
+      (player) => player.userId.toString() === userId.toString()
+    );
+
+    if (!isParticipant) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not a participant in this game room.',
+      });
+    }
+
+    // Check if game has started
+    if (gameRoom.status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        message: 'Game has not started yet or already finished.'
+      });
+    }
+
+    // Debug log the questions array
+    console.log('Raw questions data:', JSON.stringify(gameRoom.questions, null, 2));
+
+    // Format questions as per requirements
+    const formattedQuestions = gameRoom.questions.map((question: any, index) => {
+      // Log each question's available fields
+      console.log(`Question ${index + 1} fields:`, Object.keys(question));
+      
+      return {
+        questionId: question._id,
+        questionNumber: index + 1,
+        questionText: question.text || question.question || 'No question text available',
+        questionType: 'multiple-choice',
+        options: question.options || [],
+        timerInSeconds: question.timerInSeconds || 30,
+        difficulty: question.difficulty || 'easy',
+        category: question.category || 'General'
+      };
+    });
+    
+    console.log('Formatted questions:', JSON.stringify(formattedQuestions, null, 2));
+
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        questions: formattedQuestions,
+        totalQuestions: formattedQuestions.length,
+        roomCode: gameRoom.roomCode,
+        gameStatus: gameRoom.status
+      }
+    });
+
+  } catch (error: any) {
+    console.error('Error fetching questions:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error while fetching questions',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 export const leaveGame = async (req: ILeaveGameRequest, res: Response, next: NextFunction) => {
   const { roomCode } = req.body;
   const userId = req.user?._id;
