@@ -7,7 +7,9 @@ import {
   joinGame, 
   getGameLobby, 
   leaveGame,
-  getQuestions 
+  getQuestions,
+  submitAnswer,
+  getGameSummary
 } from './game.controller';
 
 const router = express.Router();
@@ -54,5 +56,19 @@ router.post('/leave', protect, leaveGame);
  * @access  Private
  */
 router.get('/questions/:roomCode', protect, getQuestions);
+
+/**
+ * @route   POST /api/game/submit-answer
+ * @desc    Submit an answer to a question
+ * @access  Private
+ */
+router.post('/submit-answer', protect, submitAnswer);
+
+/**
+ * @route   GET /api/game/summary/:roomCode
+ * @desc    Get game summary for the logged-in user
+ * @access  Private
+ */
+router.get('/summary/:roomCode', protect, getGameSummary);
 
 export default router;

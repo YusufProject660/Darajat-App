@@ -600,3 +600,314 @@ export const leaveGame = async (req: ILeaveGameRequest, res: Response, next: Nex
     next(new ErrorResponse('Failed to leave game room', 500));
   }
 };
+
+interface ISubmitAnswerRequest extends Request {
+  body: {
+    roomCode: string;
+    questionId: string;
+    selectedOption: string;
+    timeTaken: number;
+  };
+  user?: IUser;
+}
+
+/**
+ * @desc    Submit an answer to a question
+ * @route   POST /api/game/submit-answer
+ * @access  Private
+ */
+ export const submitAnswer = async (req: ISubmitAnswerRequest, res: Response, next: NextFunction) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { roomCode, questionId, selectedOption, timeTaken } = req.body;
+    const userId = req.user?._id;
+
+    // Validate request
+    if (!roomCode || !questionId || selectedOption === undefined || timeTaken === undefined) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorResponse('Missing required fields', 400));
+    }
+
+    if (!userId) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorResponse('User not authenticated', 401));
+    }
+
+    // Find the game room
+    const gameRoom = await GameRoom.findOne({ roomCode }).session(session);
+    if (!gameRoom) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorResponse('Game room not found', 404));
+    }
+
+    // Check if game is active
+    if (gameRoom.status !== 'active') {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorResponse('Game is not active', 400));
+    }
+
+    // Check if user is a player in this game
+    const player = gameRoom.players.find(p => p.userId.toString() === userId.toString());
+    if (!player) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorResponse('You are not a player in this game', 403));
+    }
+
+    // Check if the question exists in this game
+    const questionObjectId = new mongoose.Types.ObjectId(questionId);
+    if (!gameRoom.questions.some(q => q.toString() === questionId)) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorResponse('Question not found in this game', 404));
+    }
+
+    // Check if player already answered this question
+    const alreadyAnswered = gameRoom.answeredQuestions?.some(
+      aq => aq.playerId.toString() === userId.toString() && 
+            aq.questionId.toString() === questionId
+    ) || false;
+
+    if (alreadyAnswered) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorResponse('You have already answered this question', 400));
+    }
+
+    // Get the question details
+    const question = await Question.findById(questionId).session(session);
+    if (!question) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorResponse('Question not found', 404));
+    }
+
+    // Check if time has expired (assuming question has a timer in seconds)
+    const questionTimer = 30; // Default 30 seconds per question
+    if (timeTaken > questionTimer) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(new ErrorResponse('Time\'s up!', 400));
+    }
+
+    // Check if answer is correct
+    const selectedOptionIndex = question.options.findIndex(opt => opt === selectedOption);
+    const isCorrect = selectedOptionIndex === question.correctAnswer;
+
+    // Calculate score: 10 points for each correct answer
+    const scoreEarned = isCorrect ? 10 : 0;
+
+    // Update player's score
+    player.score += scoreEarned;
+
+    // Initialize answeredQuestions array if it doesn't exist
+    if (!gameRoom.answeredQuestions) {
+      gameRoom.answeredQuestions = [];
+    }
+
+    // Record the answer
+    gameRoom.answeredQuestions.push({
+      playerId: userId,
+      questionId: question._id,
+      selectedOption: selectedOptionIndex,
+      isCorrect,
+      timeTaken,
+      answeredAt: new Date()
+    } as any);
+
+    // Save changes
+    await gameRoom.save({ session });
+    await session.commitTransaction();
+    session.endSession();
+
+    // Prepare response
+    const questionsAnswered = gameRoom.answeredQuestions.filter(
+      aq => aq.playerId.toString() === userId.toString()
+    ).length;
+
+    res.status(200).json({
+      success: true,
+      message: 'Answer submitted successfully',
+      result: {
+        isCorrect,
+        correctAnswer: question.options[question.correctAnswer]
+      },
+      playerStats: {
+        currentScore: player.score,
+        questionsAnswered
+      }
+    });
+
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    next(error);
+  }
+};
+
+// Interface for game summary request
+interface IGameSummaryRequest extends Request {
+  params: {
+    roomCode: string;
+  };
+  user?: IUser;
+}
+
+/**
+ * @desc    Get game summary for the logged-in user
+ * @route   GET /api/game/summary/:roomCode
+ * @access  Private
+ */
+export const getGameSummary = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { roomCode } = req.params;
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return next(new ErrorResponse('User not authenticated', 401));
+    }
+
+    // Fetch game room with populated questions and answeredQuestions
+    const gameRoom = await GameRoom.findOne({ roomCode })
+      .populate({
+        path: 'questions',
+        select: 'text question options correctAnswer explanation category difficulty',
+        options: { sort: { _id: 1 } },
+      })
+      .populate({
+        path: 'answeredQuestions.questionId',
+        select: 'text question options correctAnswer explanation'
+      })
+      .lean();
+
+    if (!gameRoom) {
+      return next(new ErrorResponse('Game not found', 404));
+    }
+
+    if (gameRoom.status !== 'finished') {
+      return res.status(400).json({
+        success: false,
+        message: 'Game summary not available. The game is not yet complete.',
+      });
+    }
+
+    const player = gameRoom.players.find(p => 
+      p.userId && p.userId.toString() === userId.toString()
+    );
+    
+    if (!player) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to view the summary for this game.',
+      });
+    }
+
+    // Create a map of question IDs to questions for quick lookup
+    const questionMap = new Map();
+    gameRoom.questions.forEach((q: any) => {
+      if (q && q._id) {
+        questionMap.set(q._id.toString(), q);
+      }
+    });
+
+    // Get user's answers
+    const userAnswers = gameRoom.answeredQuestions
+      .filter((aq: any) => 
+        aq.playerId && 
+        aq.playerId.toString() === userId.toString() && 
+        aq.questionId
+      )
+      .reduce((acc: any, aq: any) => {
+        const questionId = aq.questionId._id 
+          ? aq.questionId._id.toString() 
+          : aq.questionId.toString();
+        acc[questionId] = aq;
+        return acc;
+      }, {});
+
+    // Prepare question summaries
+    const questionSummaries = gameRoom.questions.map((q: any) => {
+      if (!q) return null;
+      
+      const questionId = q._id.toString();
+      const answer = userAnswers[questionId];
+      const questionText = q.text || q.question || 'Question not found';
+      const options = Array.isArray(q.options) ? q.options : [];
+      
+      // Handle correct answer
+      let correctAnswerIndex = 0;
+      if (typeof q.correctAnswer === 'number') {
+        correctAnswerIndex = q.correctAnswer;
+      } else if (q.correctAnswer && typeof q.correctAnswer === 'string') {
+        correctAnswerIndex = parseInt(q.correctAnswer, 10) || 0;
+      }
+
+      // Handle user's selected answer
+      let selectedOptionIndex = -1;
+      if (answer) {
+        if (typeof answer.selectedOption === 'number') {
+          selectedOptionIndex = answer.selectedOption;
+        } else if (typeof answer.selectedOption === 'string') {
+          selectedOptionIndex = parseInt(answer.selectedOption, 10);
+        }
+      }
+
+      const isCorrect = answer ? answer.isCorrect : false;
+      const timeTaken = answer?.timeTaken || 0;
+      const explanation = q.explanation || 'No explanation available';
+
+      return {
+        question: questionText,
+        options: [...options],
+        yourAnswer: selectedOptionIndex >= 0 && selectedOptionIndex < options.length 
+          ? options[selectedOptionIndex] 
+          : 'Not answered',
+        rightAnswer: options[correctAnswerIndex] || 'Not available',
+        isCorrect,
+        timeTaken,
+        explanation,
+        questionId
+      };
+    }).filter(Boolean); // Remove any null entries
+
+    // Calculate statistics
+    const correctAnswers = questionSummaries.filter((q: any) => q.isCorrect).length;
+    const totalQuestions = questionSummaries.length;
+    const totalScore = correctAnswers * 10;
+    const accuracy = totalQuestions > 0 ? Math.round((correctAnswers / totalQuestions) * 100) : 0;
+
+    // Calculate rank
+    const sortedPlayers = [...gameRoom.players]
+      .filter(p => p.userId) // Filter out any invalid player entries
+      .sort((a, b) => (b.score || 0) - (a.score || 0));
+      
+    const rank = sortedPlayers.findIndex(p => 
+      p.userId && p.userId.toString() === userId.toString()
+    ) + 1;
+
+    return res.status(200).json({
+      success: true,
+      message: 'Game summary fetched successfully.',
+      summary: {
+        totalScore,
+        accuracy,
+        correctAnswers,
+        totalQuestions,
+        rank,
+        questions: questionSummaries,
+      },
+    });
+
+  } catch (error) {
+    console.error('Error getting game summary:', error);
+    next(new ErrorResponse('Server error', 500));
+  }
+};
+
+

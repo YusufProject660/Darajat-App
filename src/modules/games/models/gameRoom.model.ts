@@ -30,6 +30,13 @@ export interface IGameRoom extends Document {
     totalTime: number;
   }>;
   currentQuestion?: number;
+  answeredQuestions: Array<{
+    playerId: mongoose.Types.ObjectId;
+    questionId: mongoose.Types.ObjectId;
+    isCorrect: boolean;
+    timeTaken: number;
+    answeredAt: Date;
+  }>;
   createdAt: Date;
 }
 
@@ -73,6 +80,13 @@ const gameRoomSchema = new Schema<IGameRoom>({
     totalTime: { type: Number, default: 0 }
   }],
   currentQuestion: { type: Number, default: 0 },
+  answeredQuestions: [{
+    playerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    questionId: { type: Schema.Types.ObjectId, ref: 'Question', required: true },
+    isCorrect: { type: Boolean, required: true },
+    timeTaken: { type: Number, required: true },
+    answeredAt: { type: Date, default: Date.now }
+  }],
   createdAt: { type: Date, default: Date.now }
 });
 
