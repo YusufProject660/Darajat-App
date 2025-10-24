@@ -7,6 +7,13 @@ import { Question } from './models/question.model';
 import { generateUniqueRoomCode } from './utils/generateRoomCode';
 import { IUser } from '../users/user.model';
 
+interface IGameLobbyRequest extends Request {
+  params: {
+    roomCode: string;
+  };
+  user?: IUser;
+}
+
 interface IRequestWithUser extends Request {
   user?: IUser;
 }
@@ -354,57 +361,30 @@ export const getGameRoom = async (req: Request, res: Response, next: NextFunctio
       return next(new ErrorResponse('Game room not found', 404));
     }
 
-    res.status(200).json({
-      success: true,
-      data: gameRoom
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-export const getGameLobby = async (req: IRequestWithUser, res: Response, next: NextFunction) => {
-  try {
-    const { roomCode } = req.params;
-    
-    if (!roomCode) {
-      return next(new ErrorResponse('Room code is required', 400));
-    }
-
-    const gameRoom = await GameRoom.findOne({ roomCode })
-      .populate('players.userId', 'username avatar')
-      .select('-questions -results -__v')
-      .lean();
-
-    if (!gameRoom) {
-      return next(new ErrorResponse('Game room not found or expired', 404));
-    }
-
     // Get the first enabled category and its difficulty
-    const enabledCategories = Object.entries(gameRoom.settings.categories)
-      .filter(([_, settings]) => settings.enabled)
-      .map(([category, settings]) => ({ category, difficulty: settings.difficulty }));
+    const enabledCategory = Object.entries(gameRoom.categories || {}).find(
+      ([, settings]) => settings.enabled
+    );
 
-    const firstCategory = enabledCategories[0] || { category: 'General', difficulty: 'medium' };
+    if (!enabledCategory) {
+      return next(new ErrorResponse('No enabled categories found', 400));
+    }
+
+    const [category, settings] = enabledCategory;
+    const difficulty = settings.difficulty;
 
     // Prepare the response
     const response = {
       success: true,
-      game: {
-        roomCode: gameRoom.roomCode,
-        gameName: gameRoom.settings.gameName || 'Trivia Game',
-        description: gameRoom.settings.description || 'Test your knowledge!',
-        hostId: gameRoom.hostId,
-        category: firstCategory.category,
-        difficulty: firstCategory.difficulty,
-        numberOfQuestions: gameRoom.settings.numberOfQuestions,
-        timer: gameRoom.settings.timer || '30s',
-        playersLimit: gameRoom.settings.maximumPlayers,
+      data: {
+        ...gameRoom,
+        category,
+        difficulty,
         players: gameRoom.players.map(player => ({
-          userId: player.userId._id,
-          username: player.username || (player.userId as any).username,
-          avatar: player.avatar || (player.userId as any).avatar
-        })),
-        status: gameRoom.status
+          userId: player.userId?._id,
+          username: player.username || player.userId?.username,
+          avatar: player.avatar || player.userId?.avatar
+        }))
       }
     };
 
@@ -413,6 +393,7 @@ export const getGameLobby = async (req: IRequestWithUser, res: Response, next: N
     next(error);
   }
 };
+
 interface ILeaveGameRequest extends Request {
   body: {
     roomCode: string;
@@ -420,11 +401,6 @@ interface ILeaveGameRequest extends Request {
   user?: IUser;
 }
 
-/**
- * @desc    Leave a game room
- * @route   POST /api/game/leave
- * @access  Private
- */
 interface IGetQuestionsRequest extends Request {
   params: {
     roomCode: string;
@@ -751,6 +727,60 @@ interface ISubmitAnswerRequest extends Request {
   }
 };
 
+/**
+ * @desc    Get game lobby details by room code
+ * @route   GET /api/game/lobby/:roomCode
+ * @access  Private
+ */
+export const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: NextFunction) => {
+  try {
+    const { roomCode } = req.params;
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return next(new ErrorResponse('User not authenticated', 401));
+    }
+
+    const gameRoom = await GameRoom.findOne({ roomCode })
+      .select('-questions') // Don't send questions in the lobby
+      .populate('players.userId', 'username avatar')
+      .lean();
+
+    if (!gameRoom) {
+      return next(new ErrorResponse('Game room not found', 404));
+    }
+
+    // Check if user is a participant
+    const isParticipant = gameRoom.players.some(
+      player => player.userId && player.userId._id.toString() === userId.toString()
+    );
+
+    if (!isParticipant) {
+      return next(new ErrorResponse('You are not a participant in this game', 403));
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        roomCode: gameRoom.roomCode,
+        host: gameRoom.host,
+        status: gameRoom.status,
+        players: gameRoom.players.map(player => ({
+          userId: player.userId?._id,
+          username: player.username || (player.userId as any)?.username,
+          avatar: player.avatar || (player.userId as any)?.avatar,
+          score: player.score || 0
+        })),
+        maxPlayers: gameRoom.maxPlayers,
+        currentPlayers: gameRoom.players.length,
+        gameSettings: gameRoom.gameSettings
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Interface for game summary request
 interface IGameSummaryRequest extends Request {
   params: {
@@ -910,4 +940,154 @@ export const getGameSummary = async (req: Request, res: Response, next: NextFunc
   }
 };
 
+// Interface for game leaderboard request
+interface IGameLeaderboardRequest extends Request {
+  params: {
+    roomCode: string;
+  };
+  user?: IUser;
+}
+
+/**
+ * @desc    Get the leaderboard for a completed game
+ * @route   GET /api/game/leaderboard/:roomCode
+ * @access  Private
+ */
+export const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, next: NextFunction) => {
+  try {
+    const { roomCode } = req.params;
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return next(new ErrorResponse('User not authenticated', 401));
+    }
+
+    // Find the game room
+    const gameRoom = await GameRoom.findOne({ 
+      roomCode: roomCode.toUpperCase() 
+    }).populate('players.userId', 'username avatar');
+
+    // Check if game room exists
+    if (!gameRoom) {
+      return res.status(404).json({
+        success: false,
+        message: 'Leaderboard not available. The game room was not found or the game is not yet complete.'
+      });
+    }
+
+    // Check if game is completed
+    if (gameRoom.status !== 'finished') {
+      return res.status(400).json({
+        success: false,
+        message: 'Leaderboard not available. The game room was not found or the game is not yet complete.'
+      });
+    }
+
+    // Check if user is a participant in this game
+    const isParticipant = gameRoom.players.some(player => 
+      player.userId && player.userId._id.toString() === userId.toString()
+    );
+
+    if (!isParticipant) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to view this leaderboard.'
+      });
+    }
+
+    // Define an interface for player stats
+    interface PlayerStats {
+      userId: mongoose.Types.ObjectId;
+      username: string;
+      avatar?: string;
+      points: number;
+      accuracy: number;
+      averageTime: number;
+      correctAnswers: number;
+      totalQuestionsAnswered: number;
+    };
+
+    // Calculate player stats
+    const playerStats: PlayerStats[] = [];
+    
+    for (const player of gameRoom.players) {
+      // Skip if userId is not populated or is a string
+      if (!player.userId || typeof player.userId === 'string') {
+        continue;
+      }
+
+      // Ensure userId is populated and has the correct type
+      const userId = player.userId as unknown as { _id: mongoose.Types.ObjectId; username?: string; avatar?: string };
+      
+      // Get all answers for this player
+      const playerAnswers = gameRoom.answeredQuestions.filter(
+        aq => aq.playerId && aq.playerId.toString() === userId._id.toString()
+      );
+
+      const correctAnswers = playerAnswers.filter(a => a.isCorrect).length;
+      const totalQuestionsAnswered = playerAnswers.length;
+      const totalTimeTaken = playerAnswers.reduce((sum, a) => sum + (a.timeTaken || 0), 0);
+
+      // Calculate accuracy (percentage of correct answers, 0 if no answers)
+      const accuracy = totalQuestionsAnswered > 0 
+        ? Math.round((correctAnswers / totalQuestionsAnswered) * 100) 
+        : 0;
+
+      // Calculate average time per question (in seconds, rounded)
+      const averageTime = totalQuestionsAnswered > 0
+        ? Math.round(totalTimeTaken / totalQuestionsAnswered / 1000) // Convert ms to seconds
+        : 0;
+
+      playerStats.push({
+        userId: userId._id,
+        username: userId.username || 'Unknown',
+        avatar: userId.avatar,
+        points: player.score || 0,
+        accuracy,
+        averageTime,
+        correctAnswers,
+        totalQuestionsAnswered
+      });
+    }
+
+    // Sort players by: points (desc), accuracy (desc), averageTime (asc)
+    const sortedPlayers = [...playerStats].sort((a, b) => {
+      // First by points (descending)
+      if (a.points !== b.points) {
+        return b.points - a.points;
+      }
+      
+      // If points are equal, by accuracy (descending)
+      if (a.accuracy !== b.accuracy) {
+        return b.accuracy - a.accuracy;
+      }
+      
+      // If accuracy is also equal, by averageTime (ascending)
+      return a.averageTime - b.averageTime;
+    });
+
+    // Add ranks
+    const leaderboard = sortedPlayers.map((player, index) => ({
+      rank: index + 1,
+      userId: player.userId,
+      username: player.username,
+      avatar: player.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(player.username)}&background=random`,
+      points: player.points,
+      accuracy: player.accuracy,
+      averageTime: player.averageTime
+    }));
+
+    res.status(200).json({
+      success: true,
+      message: 'Leaderboard fetched successfully.',
+      leaderboard: {
+        players: leaderboard
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in getGameLeaderboard:', error);
+    next(new ErrorResponse('Error fetching leaderboard', 500));
+  }
+};
 

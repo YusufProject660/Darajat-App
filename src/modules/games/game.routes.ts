@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { protect } from '../../middlewares/auth.middleware';
-import { validateCreateGame, validateJoinGame } from './validations/game.validations';
+import { validateCreateGame, validateJoinGame , } from './validations/game.validations';
 import { 
   createGame, 
   getGameRoom, 
@@ -9,7 +9,8 @@ import {
   leaveGame,
   getQuestions,
   submitAnswer,
-  getGameSummary
+  getGameSummary,
+  getGameLeaderboard
 } from './game.controller';
 
 const router = express.Router();
@@ -70,5 +71,12 @@ router.post('/submit-answer', protect, submitAnswer);
  * @access  Private
  */
 router.get('/summary/:roomCode', protect, getGameSummary);
+
+/**
+ * @route   GET /api/game/leaderboard/:roomCode
+ * @desc    Get the leaderboard for a completed game
+ * @access  Private
+ */
+router.get('/leaderboard/:roomCode', protect, getGameLeaderboard);
 
 export default router;
