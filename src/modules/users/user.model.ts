@@ -1,5 +1,4 @@
-import { Schema, model, Document } from 'mongoose';
-import bcrypt from 'bcryptjs';
+import { Schema, model, Document, models } from 'mongoose';
 
 // Interface for User document
 export interface ISerializedUser {
@@ -69,7 +68,9 @@ const userSchema = new Schema<IUser>(
       type: String
     },
     googleId: {
-      type: String
+      type: String,
+      sparse: true,
+      index: true
     },
     stats: {
       gamesPlayed: { type: Number, default: 0 },
@@ -110,11 +111,12 @@ userSchema.virtual('confirmPassword')
   .get(function(this: IUser) { return this._confirmPassword; })
   .set(function(this: IUser, value: string) { this._confirmPassword = value; });
 
-// Method to match password (plain text comparison - NOT RECOMMENDED)
-userSchema.methods.matchPassword = function (enteredPassword: string) {
-  return this.password === enteredPassword;
+// Method to match password (plain text comparison)
+userSchema.methods.matchPassword = function (enteredPassword: string): boolean {
+  return enteredPassword === this.password;
 };
 
-const User = model<IUser>('User', userSchema);
+// Check if model exists before creating it to prevent OverwriteModelError
+const User = models.User || model<IUser>('User', userSchema);
 
 export default User;

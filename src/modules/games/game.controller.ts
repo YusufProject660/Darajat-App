@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { ErrorResponse } from '../../utils/errorResponse';
-import { GameRoom } from './models/gameRoom.model';
+import { GameRoom, IPlayer } from './models/gameRoom.model';
 import { Deck } from './models/deck.model';
+import User from '../users/user.model';
 import { Question } from './models/question.model';
 import { generateUniqueRoomCode } from './utils/generateRoomCode';
 import { IUser } from '../users/user.model';
@@ -1086,8 +1087,184 @@ export const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Resp
     });
 
   } catch (error) {
-    console.error('Error in getGameLeaderboard:', error);
-    next(new ErrorResponse('Error fetching leaderboard', 500));
+    await session.abortTransaction();
+    session.endSession();
+    console.error('Error finishing game:', error);
+    next(new ErrorResponse('Failed to finish game', 500));
   }
 };
 
+// Interface for finish game request
+interface IFinishGameRequest extends Request {
+  params: {
+    roomCode: string;
+  };
+  user?: IUser;
+}
+
+/**
+ * @desc    Finish a game and update player stats
+ * @route   PATCH /api/games/finish/:roomCode
+ * @access  Private
+ */
+export const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunction) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { roomCode } = req.params;
+    
+    // Input validation
+    if (!roomCode || typeof roomCode !== 'string' || roomCode.trim() === '') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: 'Room code is required',
+        statusCode: 400
+      });
+    }
+
+    // Find the game room with case-insensitive search
+    const gameRoom = await GameRoom.findOne({ 
+      roomCode: { $regex: new RegExp(`^${roomCode}$`, 'i') }
+    })
+      .populate<{ players: IPlayer[] }>('players.userId', 'stats')
+      .session(session);
+
+    if (!gameRoom) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: `Game room with code '${roomCode}' not found`,
+        statusCode: 404
+      });
+    }
+
+    // Check game status
+    if (gameRoom.status === 'finished') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(409).json({
+        success: false,
+        message: `Game '${roomCode}' has already been completed`,
+        status: gameRoom.status,
+        finishedAt: gameRoom.finishedAt,
+        statusCode: 409
+      });
+    }
+
+    // Additional validation - check if game has started
+    if (gameRoom.status !== 'active') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: `Game '${roomCode}' is not in a finishable state. Current status: ${gameRoom.status}`,
+        statusCode: 400
+      });
+      return next(new ErrorResponse(
+        `Game '${roomCode}' is not in a finishable state. Current status: ${gameRoom.status}`,
+        400
+      ));
+    }
+
+    // Calculate stats
+    const totalQuestions = gameRoom.questions.length;
+    const answered = gameRoom.answeredQuestions || [];
+    const correct = answered.filter((q: any) => q.isCorrect).length;
+    const totalTime = answered.reduce((sum: number, q: any) => sum + (q.timeTaken || 0), 0);
+    const accuracy = totalQuestions > 0 ? Math.round((correct / totalQuestions) * 100) : 0;
+
+    // Update game room status
+    gameRoom.status = 'finished';
+    gameRoom.finishedAt = new Date();
+    
+    // Update game stats
+    gameRoom.stats = {
+      gamesPlayed: 1,
+      accuracy,
+      bestScore: correct,
+      totalTime,
+      totalQuestions,
+      correctAnswers: correct,
+      averageTimePerQuestion: answered.length > 0 ? totalTime / answered.length : 0
+    };
+
+    await gameRoom.save({ session });
+
+    // Update player stats
+    const updatePromises = gameRoom.players.map(async (player: IPlayer) => {
+      if (!player.userId) return null;
+      
+      const playerAnswers = answered.filter((a: any) => 
+        a.playerId && a.playerId.toString() === player.userId.toString()
+      );
+      
+      const playerCorrect = playerAnswers.filter((a: any) => a.isCorrect).length;
+      const playerAccuracy = totalQuestions > 0 ? Math.round((playerCorrect / totalQuestions) * 100) : 0;
+
+      const update: any = {
+        $inc: { 
+          'stats.gamesPlayed': 1,
+          'stats.totalCorrectAnswers': playerCorrect,
+          'stats.totalQuestionsAnswered': playerAnswers.length,
+          'stats.totalTimePlayed': totalTime
+        },
+        $max: { 'stats.bestScore': player.score || 0 }
+      };
+
+      // Calculate new average accuracy
+      const user = await User.findById(player.userId).session(session);
+      if (user) {
+        const currentTotalCorrect = user.stats?.totalCorrectAnswers || 0;
+        const currentTotalQuestions = user.stats?.totalQuestionsAnswered || 0;
+        const newTotalCorrect = currentTotalCorrect + playerCorrect;
+        const newTotalQuestions = currentTotalQuestions + playerAnswers.length;
+        
+        update.$set = {
+          ...update.$set,
+          'stats.averageAccuracy': newTotalQuestions > 0 
+            ? Math.round((newTotalCorrect / newTotalQuestions) * 100)
+            : 0
+        };
+      }
+
+      return User.findByIdAndUpdate(player.userId, update, { new: true, session });
+    });
+
+    await Promise.all(updatePromises);
+    await session.commitTransaction();
+    session.endSession();
+
+    res.status(200).json({
+      success: true,
+      message: 'Game finished and stats updated successfully',
+      data: {
+        roomCode: gameRoom.roomCode,
+        status: gameRoom.status,
+        finishedAt: gameRoom.finishedAt,
+        stats: gameRoom.stats,
+        playersUpdated: gameRoom.players.length
+      }
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    next(error);
+  }
+};
+
+// export {
+//   createGame,
+//   joinGame,
+//   getGameRoom,
+//   getQuestions,
+//   leaveGame,
+//   submitAnswer,
+//   getGameLobby,
+//   getGameSummary,
+//   getGameLeaderboard,
+//   finishGame
+// };

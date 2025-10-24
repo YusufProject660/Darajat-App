@@ -10,7 +10,8 @@ import {
   getQuestions,
   submitAnswer,
   getGameSummary,
-  getGameLeaderboard
+  getGameLeaderboard,
+  finishGame
 } from './game.controller';
 
 const router = express.Router();
@@ -78,5 +79,24 @@ router.get('/summary/:roomCode', protect, getGameSummary);
  * @access  Private
  */
 router.get('/leaderboard/:roomCode', protect, getGameLeaderboard);
+
+/**
+ * @route   PATCH /api/games/finish/:roomCode
+ * @desc    Finish a game and update player stats
+ * @access  Private
+ */
+import mongoose from 'mongoose';
+import { IUser } from '../users/user.model';
+
+interface IFinishGameRequest extends Request {
+  params: {
+    roomCode: string;
+  };
+  user?: IUser & {
+    _id: mongoose.Types.ObjectId;
+  };
+}
+
+router.patch('/finish/:roomCode', protect, (req: IFinishGameRequest, res: Response, next) => finishGame(req, res, next));
 
 export default router;

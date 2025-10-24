@@ -72,17 +72,33 @@ export const register = async (username: string, email: string, password: string
 };
 
 export const login = async (email: string, password: string): Promise<AuthResponse> => {
+  // Validate input
+  if (!email || !password) {
+    const error = new Error('Email and password are required') as any;
+    error.statusCode = 400;
+    error.code = 'MISSING_FIELDS';
+    throw error;
+  }
+
+  // Check if user exists
   const user = await User.findOne({ email }).select('+password');
-
   if (!user) {
-    throw new Error('Invalid credentials');
+    const error = new Error('No account found with this email') as any;
+    error.statusCode = 401;
+    error.code = 'USER_NOT_FOUND';
+    throw error;
   }
 
-  const isMatch = await user.matchPassword(password);
-
+  // Check if password matches (plain text comparison)
+  const isMatch = user.matchPassword(password);
   if (!isMatch) {
-    throw new Error('Invalid credentials');
+    const error = new Error('Invalid password') as any;
+    error.statusCode = 401;
+    error.code = 'INVALID_PASSWORD';
+    throw error;
   }
+
+  // Generate token and return user data
   const token = generateToken(user);
   return formatUserResponse(user, token);
 };

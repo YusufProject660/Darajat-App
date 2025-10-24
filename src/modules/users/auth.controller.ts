@@ -82,9 +82,12 @@ export const registerUser = asyncHandler(async (req: AuthRequest, res: Response,
 export const loginUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { email, password } = req.body;
 
-  // Validate input
+  // Check for missing fields
   if (!email || !password) {
-    return next(new AppError('Please provide email and password', 400));
+    return res.status(400).json({
+      success: false,
+      message: 'Email and password are required'
+    });
   }
 
   try {
@@ -101,11 +104,37 @@ export const loginUser = asyncHandler(async (req: Request, res: Response, next: 
 
     res.cookie('token', user.token, cookieOptions);
 
-    res.status(200).json({
+    // Return success response with token
+    res.status(201).json({
       success: true,
-      data: user
+      message: 'Login successful',
+      token: user.token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        avatar: user.avatar,
+        role: user.role,
+        stats: user.stats
+      }
     });
-  } catch (error) {
+  } catch (error: any) {
+    // Handle specific error cases
+    if (error.message === 'No account found with this email') {
+      return res.status(401).json({
+        success: false,
+        message: 'No account found with this email'
+      });
+    }
+    
+    if (error.message === 'Invalid password') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid password'
+      });
+    }
+    
+    // For any other errors, pass to the error handler
     next(error);
   }
 });

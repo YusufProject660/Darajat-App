@@ -1,8 +1,9 @@
 import passport from 'passport';
-import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import { Strategy as GoogleStrategy, StrategyOptions, Profile, VerifyCallback } from 'passport-google-oauth20';
 import { randomBytes } from 'crypto';
-import User, { ISerializedUser } from '../modules/users/user.model';
+import jwt, { JwtPayload } from 'jsonwebtoken';
 import { config } from './env';
+import User, { ISerializedUser } from '../modules/users/user.model';
 
 // Extend Express User type to include our user properties
 declare global {
@@ -11,9 +12,22 @@ declare global {
   }
 }
 
+// JWT Payload
+export interface AuthJwtPayload extends JwtPayload {
+  id: string;
+  email: string;
+}
+
+// Google OAuth Strategy Options
+const googleStrategyOptions: StrategyOptions = {
+  clientID: config.google.clientId,
+  clientSecret: config.google.clientSecret,
+  callbackURL: config.google.callbackUrl,
+};
+
 // Serialize user into the session
 passport.serializeUser((user: Express.User, done) => {
-  done(null, user._id); // no need toString, Mongoose ID is stringifiable
+  done(null, user._id);
 });
 
 // Deserialize user from the session
@@ -24,7 +38,6 @@ passport.deserializeUser(async (id: string, done) => {
       .lean();
 
     if (!user) return done(null, false);
-
     done(null, user as unknown as Express.User);
   } catch (error) {
     done(error as Error);
@@ -34,24 +47,24 @@ passport.deserializeUser(async (id: string, done) => {
 // Google OAuth Strategy
 passport.use(
   new GoogleStrategy(
-    {
-      clientID: config.google.clientId,
-      clientSecret: config.google.clientSecret,
-      callbackURL: config.google.callbackUrl,
-    },
-    async (_accessToken, _refreshToken, profile, done) => {
+    googleStrategyOptions,
+    async (
+      _accessToken: string,
+      _refreshToken: string,
+      profile: Profile,
+      done: VerifyCallback
+    ) => {
       try {
-        // 1️⃣ Check if user already exists
+        // Check if user already exists
         let user = await User.findOne({ googleId: profile.id }).lean();
 
         if (user) {
-          // remove sensitive fields
-          delete (user as any).password;
-          delete (user as any).__v;
-          return done(null, user as unknown as Express.User);
+          // Remove sensitive fields
+          const { password, __v, ...safeUser } = user as any;
+          return done(null, safeUser as Express.User);
         }
 
-        // 2️⃣ Create a new user if not exists
+        // Create a new user if not exists
         const email = profile.emails?.[0]?.value || '';
         const username = profile.displayName || `user_${profile.id.slice(0, 8)}`;
         const avatar = profile.photos?.[0]?.value || '';
@@ -70,13 +83,27 @@ passport.use(
           password: randomBytes(20).toString('hex'), // Random placeholder password
         });
 
+        // Generate JWT token
+        const token = jwt.sign(
+          { id: newUser._id, email: newUser.email } as AuthJwtPayload,
+          config.jwt.secret,
+          { expiresIn: config.jwt.expiresIn }
+        );
+
+        // Remove sensitive data
         const userObj = newUser.toObject();
         delete (userObj as any).password;
         delete (userObj as any).__v;
 
-        done(null, userObj as unknown as Express.User);
+        // Attach token to user object
+        const userWithToken = {
+          ...userObj,
+          token,
+        };
+
+        done(null, userWithToken as unknown as Express.User);
       } catch (error) {
-        done(error as Error, false);
+        done(error as Error);
       }
     }
   )

@@ -91,4 +91,4 @@ const gameRoomSchema = new Schema<IGameRoom>({
 });
 
 // No need for explicit index as we already have unique: true in the schema
-export const GameRoom = mongoose.model<IGameRoom>('GameRoom', gameRoomSchema);
+export const GameRoom = mongoose.models.GameRoom || mongoose.model<IGameRoom>('GameRoom', gameRoomSchema);

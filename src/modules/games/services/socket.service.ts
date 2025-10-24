@@ -1,21 +1,31 @@
 import { Server as HttpServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
-import { createWebSocketRouter } from '../websocket.routes';
 import { gameService } from './game.service';
 import { ClientEvents, InterServerEvents, ServerEvents, SocketData } from '../types/game.types';
 
 export class SocketService {
+  private static instance: SocketService;
   private io: SocketIOServer<ClientEvents, ServerEvents, InterServerEvents, SocketData>;
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
 
-  constructor(server: HttpServer, io: SocketIOServer) {
+  private constructor(server: HttpServer, io: SocketIOServer) {
     this.io = io;
     this.initializeSocket();
   }
 
+  public static getInstance(server?: HttpServer, io?: SocketIOServer): SocketService {
+    if (!SocketService.instance && server && io) {
+      SocketService.instance = new SocketService(server, io);
+    }
+    return SocketService.instance;
+  }
+
   private initializeSocket(): void {
+    console.log('🌐 WebSocket server is now listening for connections on path: /ws/socket.io');
+    
     this.io.on('connection', (socket: Socket<ClientEvents, ServerEvents, InterServerEvents, SocketData>) => {
-      console.log('New client connected:', socket.id);
+      console.log('✅ New WebSocket connection - ID:', socket.id);
+      console.log('👥 Total connected clients:', this.io.engine.clientsCount);
 
       // Store player and room information in the socket
       socket.data = {
@@ -197,30 +207,15 @@ export class SocketService {
       });
 
       // Handle disconnection
-      socket.on('disconnect', () => {
-        const { roomCode, playerId } = socket.data;
-        if (!roomCode || !playerId) return;
-
-        const result = gameService.removePlayer(playerId);
-        if (!result) return;
-
-        const { roomCode: removedRoomCode, wasHost } = result;
-        const room = gameService.getRoom(removedRoomCode);
+      socket.on('disconnect', (reason) => {
+        console.log('❌ Client disconnected - ID:', socket.id, 'Reason:', reason);
+        console.log('👥 Remaining connected clients:', this.io.engine.clientsCount);
         
-        if (room) {
-          if (wasHost && room.players.length > 0) {
-            // Notify players about the new host
-            this.io.to(removedRoomCode).emit('player_joined', { players: room.players });
-          }
-          
-          // Notify remaining players that a player has left
-          this.io.to(removedRoomCode).emit('player_left', {
-            playerId,
-            players: room.players
-          });
+        // Handle player disconnection
+        const { roomCode, playerId } = socket.data;
+        if (roomCode && playerId) {
+          this.handlePlayerDisconnect(roomCode, playerId, socket.id);
         }
-
-        console.log(`Player ${playerId} disconnected from room ${removedRoomCode}`);
       });
     });
   }
@@ -302,6 +297,29 @@ export class SocketService {
     }
   }
 
+  private handlePlayerDisconnect(roomCode: string, playerId: string, socketId: string): void {
+    const result = gameService.removePlayer(playerId);
+    if (!result) return;
+
+    const { roomCode: removedRoomCode, wasHost } = result;
+    const room = gameService.getRoom(removedRoomCode);
+    
+    if (room) {
+      if (wasHost && room.players.length > 0) {
+        // Notify players about the new host
+        this.io.to(removedRoomCode).emit('player_joined', { players: room.players });
+      }
+      
+      // Notify remaining players that a player has left
+      this.io.to(removedRoomCode).emit('player_left', {
+        playerId,
+        players: room.players
+      });
+    }
+
+    console.log(`Player ${playerId} disconnected from room ${removedRoomCode}`);
+  }
+
   // Clean up all resources when shutting down
   public cleanup(): void {
     this.activeTimers.forEach((timer) => clearInterval(timer));
@@ -309,17 +327,10 @@ export class SocketService {
   }
 }
 
-let socketService: SocketService | null = null;
+export const initializeSocket = (server: HttpServer, io: SocketIOServer): void => {
+  SocketService.getInstance(server, io);
+};
 
-export function initializeSocket(server: HttpServer, io: SocketIOServer): void {
-  if (!socketService) {
-    socketService = new SocketService(server, io);
-  }
-}
-
-export function getSocketService(): SocketService {
-  if (!socketService) {
-    throw new Error('SocketService has not been initialized. Call initializeSocket first.');
-  }
-  return socketService;
-}
+export const getSocketService = (): SocketService => {
+  return SocketService.getInstance();
+};

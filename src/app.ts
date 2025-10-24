@@ -13,6 +13,7 @@ import { config } from './config/env';
 import { connectDB } from './config/db';
 import passport from './config/passport';
 import authRoutes from './modules/users/auth.routes';
+import profileRoutes from './modules/users/routes/profile.routes';
 import gameRoutes from './modules/games/game.routes';
 import { createWebSocketRouter } from './modules/games/websocket.routes';
 import { errorHandler, notFound } from './utils/errorResponse';
@@ -92,7 +93,7 @@ export class App {
 
     // Session configuration
     this.app.use(session({
-      secret: config.jwtSecret, // Using JWT secret for session
+      secret: config.jwtSecret,
       resave: false,
       saveUninitialized: false,
       cookie: {
@@ -110,6 +111,7 @@ export class App {
   private initializeRoutes() {
     // API routes
     this.app.use('/api/auth', authRoutes);
+    this.app.use('/api/user', profileRoutes);
     this.app.use('/api/games', gameRoutes);
     // Decks listing endpoint for clients (supports filters)
     this.app.get('/api/decks', async (req: Request, res: Response) => {
