@@ -113,7 +113,7 @@ userSchema.virtual('confirmPassword')
 
 // Method to match password (plain text comparison)
 userSchema.methods.matchPassword = function (enteredPassword: string): boolean {
-  return enteredPassword === this.password;
+  return this.password === enteredPassword;
 };
 
 // Check if model exists before creating it to prevent OverwriteModelError

@@ -66,44 +66,59 @@ passport.use(
 
         // Create a new user if not exists
         const email = profile.emails?.[0]?.value || '';
-        const username = profile.displayName || `user_${profile.id.slice(0, 8)}`;
+        let username = profile.displayName || `user_${profile.id.slice(0, 8)}`;
         const avatar = profile.photos?.[0]?.value || '';
 
-        const newUser = await User.create({
-          googleId: profile.id,
-          email,
-          username,
-          avatar,
-          role: 'player',
-          stats: {
-            gamesPlayed: 0,
-            accuracy: 0,
-            bestScore: 0,
-          },
-          password: randomBytes(20).toString('hex'), // Random placeholder password
-        });
+        // Check if username already exists and append a random string if it does
+        const usernameExists = await User.findOne({ username });
+        if (usernameExists) {
+          username = `${username}_${randomBytes(4).toString('hex')}`;
+        }
 
-        // Generate JWT token
-        const token = jwt.sign(
-          { id: newUser._id, email: newUser.email } as AuthJwtPayload,
-          config.jwt.secret,
-          { expiresIn: config.jwt.expiresIn }
-        );
+        try {
+          const newUser = await User.create({
+            googleId: profile.id,
+            email,
+            username,
+            avatar,
+            role: 'player',
+            stats: {
+              gamesPlayed: 0,
+              accuracy: 0,
+              bestScore: 0,
+            },
+            password: randomBytes(20).toString('hex'), // Random placeholder password
+          });
 
-        // Remove sensitive data
-        const userObj = newUser.toObject();
-        delete (userObj as any).password;
-        delete (userObj as any).__v;
+          // Generate JWT token
+          const token = jwt.sign(
+            { id: newUser._id, email: newUser.email } as AuthJwtPayload,
+            config.jwtSecret,
+            { expiresIn: '30d' }
+          );
 
-        // Attach token to user object
-        const userWithToken = {
-          ...userObj,
-          token,
-        };
+          // Remove sensitive data
+          const userObj = newUser.toObject();
+          delete (userObj as any).password;
+          delete (userObj as any).__v;
 
-        done(null, userWithToken as unknown as Express.User);
+          // Attach token to user object
+          const userWithToken = {
+            ...userObj,
+            token,
+          };
+
+          return done(null, userWithToken as unknown as Express.User);
+        } catch (error: any) {
+          if (error.code === 11000) {
+            // If there's a duplicate key error (for email or other unique fields)
+            const duplicateField = Object.keys(error.keyPattern)[0];
+            return done(new Error(`A user with this ${duplicateField} already exists`));
+          }
+          return done(error);
+        }
       } catch (error) {
-        done(error as Error);
+        return done(error as Error);
       }
     }
   )

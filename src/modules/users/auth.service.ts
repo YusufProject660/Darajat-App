@@ -50,11 +50,11 @@ export const register = async (username: string, email: string, password: string
     throw new Error('User with this email or username already exists');
   }
 
-  // Create user with default stats
+  // Create user with plain text password and default stats
   const user = await User.create({
     username,
     email,
-    password,
+    password, // Store password as plain text
     role: 'player',
     stats: {
       gamesPlayed: 0,
@@ -89,8 +89,8 @@ export const login = async (email: string, password: string): Promise<AuthRespon
     throw error;
   }
 
-  // Check if password matches (plain text comparison)
-  const isMatch = user.matchPassword(password);
+  // Plain text password comparison
+  const isMatch = user.password === password;
   if (!isMatch) {
     const error = new Error('Invalid password') as any;
     error.statusCode = 401;
@@ -135,10 +135,7 @@ export const googleAuth = async (profile: any): Promise<AuthResponse> => {
   let user = await User.findOne({ googleId: profile.id });
 
   if (!user) {
-    // Generate a random password in plain text for Google auth
-    const plainTextPassword = crypto.randomBytes(20).toString('hex');
-    
-    // Create new user if doesn't exist
+      // Create new user with Google auth and plain text password
     user = await User.create({
       googleId: profile.id,
       email: profile.emails?.[0]?.value,
@@ -150,7 +147,7 @@ export const googleAuth = async (profile: any): Promise<AuthResponse> => {
         accuracy: 0,
         bestScore: 0
       },
-      password: plainTextPassword
+      password: 'google_oauth_user' // Simple password for Google auth users
     });
   }
 

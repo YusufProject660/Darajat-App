@@ -12,6 +12,7 @@ import { App } from './app';
 import authRoutes from "./modules/users/auth.routes";
 import gameRoutes from "./modules/games/game.routes";
 import profileRoutes from "./modules/users/routes/profile.routes";
+import dashboardRoutes from "./modules/dashboard/dashboard.routes";
 
 import { Server as SocketIOServer } from 'socket.io';
 import { initializeSocket } from './modules/games/services/socket.service';
@@ -53,6 +54,7 @@ app.use(passport.session());
 app.use("/api/auth", authRoutes);
 app.use("/api/user", profileRoutes);
 app.use("/api/game", gameRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 // Global error handler
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
