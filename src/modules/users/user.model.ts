@@ -1,4 +1,5 @@
 import { Schema, model, Document, models } from 'mongoose';
+import bcrypt from 'bcryptjs';
 
 // Interface for User document
 export interface ISerializedUser {
@@ -35,7 +36,7 @@ export interface IUser extends Document {
   resetTokenExpires?: Date;
   createdAt: Date;
   updatedAt: Date;
-  matchPassword(enteredPassword: string): boolean;
+  matchPassword(enteredPassword: string): Promise<boolean>;
   confirmPassword?: string; // Virtual field for password confirmation
   _confirmPassword?: string; // Backing field for the virtual
 }
@@ -60,9 +61,22 @@ const userSchema = new Schema<IUser>(
     },
     password: {
       type: String,
-      required: [true, 'Please add a password'],
+      required: [
+        function() { return !this.googleId; },
+        'Password is required for non-Google users'
+      ],
       minlength: 6,
-      select: false
+      select: false,
+      validate: {
+        validator: function(value: string) {
+          // Password is required only if googleId is not present
+          if (!this.googleId && (!value || value.length === 0)) {
+            return false;
+          }
+          return true;
+        },
+        message: 'Password is required for non-Google users'
+      }
     },
     avatar: {
       type: String
@@ -111,9 +125,23 @@ userSchema.virtual('confirmPassword')
   .get(function(this: IUser) { return this._confirmPassword; })
   .set(function(this: IUser, value: string) { this._confirmPassword = value; });
 
-// Method to match password (plain text comparison)
-userSchema.methods.matchPassword = function (enteredPassword: string): boolean {
-  return this.password === enteredPassword;
+// Hash password before saving
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password') || !this.password) return next();
+  
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error as Error);
+  }
+});
+
+// Method to compare password
+userSchema.methods.matchPassword = async function(enteredPassword: string): Promise<boolean> {
+  if (!this.password) return false; // For OAuth users without password
+  return bcrypt.compare(enteredPassword, this.password);
 };
 
 // Check if model exists before creating it to prevent OverwriteModelError

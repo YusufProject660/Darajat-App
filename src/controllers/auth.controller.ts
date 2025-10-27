@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import User from "../models/User";
+import User from "../modules/users/user.model";
 import jwt from "jsonwebtoken";
 import { JWT_SECRET, JWT_EXPIRES_IN, GOOGLE_CLIENT_ID } from "../config";
 import { sendEmail } from "../config/email";

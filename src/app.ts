@@ -43,23 +43,37 @@ export class App {
   }
   
   private initializeMiddlewares() {
-    // Enable CORS
-    this.app.use(cors({
-      origin: (origin, callback) => {
-        const allowed = [
-          'http://127.0.0.1:5500',
-          'http://localhost:5500',
-          'http://localhost:3000',
-          'http://localhost:5173',
-          config.clientUrl || undefined
-        ].filter(Boolean) as string[];
-        if (!origin || allowed.includes(origin)) {
+    // Define allowed origins
+    const allowedOrigins = [
+      'http://127.0.0.1:5500',
+      'http://localhost:5500',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      config.clientUrl
+    ].filter(Boolean) as string[];
+
+    // Configure CORS with proper type safety
+    const corsOptions = {
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.includes(origin)) {
           return callback(null, true);
         }
-        return callback(null, false);
+        
+        const error = new Error(`Origin ${origin} not allowed by CORS`);
+        console.warn(error.message);
+        return callback(error, false);
       },
-      credentials: true
-    }));
+      credentials: true,
+      optionsSuccessStatus: 200, // Some legacy browsers choke on 204
+      allowedHeaders: ['Content-Type', 'Authorization'],
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+    };
+
+    // Enable CORS with the configured options
+    this.app.use(cors(corsOptions));
 
     // If requests come through a proxy (e.g., live-server, nginx), trust it so req.ip is correct
     // This prevents express-rate-limit from throwing when X-Forwarded-For is present
