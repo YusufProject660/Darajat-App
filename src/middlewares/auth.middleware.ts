@@ -61,7 +61,16 @@ export const protect = async (
     }
 
     // Convert to plain object and explicitly type it as IUser
-    req.user = user.toObject() as IUser;
+    const userObj = user.toObject();
+    // Make sure the role is properly set on the user object
+    req.user = {
+      _id: userObj._id,
+      id: userObj._id.toString(),
+      role: userObj.role || 'player', // Default to 'player' if role is not set
+      email: userObj.email,
+      password: userObj.password,
+      confirmPassword: userObj.confirmPassword
+    } as IUser;
     return next();
   } catch (error) {
     console.error('Token verification error:', error);

@@ -1,8 +1,11 @@
 import { config } from '../../config/env';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import bcrypt from 'bcrypt';
 import User, { IUser } from './user.model';
 import { sendPasswordResetEmail } from '../../config/email';
+
+const SALT_ROUNDS = 10;
 
 interface AuthResponse {
   id: string;
@@ -50,11 +53,14 @@ export const register = async (username: string, email: string, password: string
     throw new Error('User with this email or username already exists');
   }
 
-  // Create user with plain text password and default stats
+  // Hash password before saving
+  const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+  
+  // Create user with hashed password and default stats
   const user = await User.create({
     username,
     email,
-    password, // Store password as plain text
+    password: hashedPassword,
     role: 'player',
     stats: {
       gamesPlayed: 0,
@@ -89,12 +95,12 @@ export const login = async (email: string, password: string): Promise<AuthRespon
     throw error;
   }
 
-  // Plain text password comparison
-  const isMatch = user.password === password;
+  // Secure password comparison using bcrypt
+  const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) {
-    const error = new Error('Invalid password') as any;
+    const error = new Error('Invalid email or password') as any;
     error.statusCode = 401;
-    error.code = 'INVALID_PASSWORD';
+    error.code = 'INVALID_CREDENTIALS';
     throw error;
   }
 
@@ -208,6 +214,108 @@ export const forgotPassword = async (email: string): Promise<{ success: boolean;
   }
 };
 
+/**
+ * Change user password
+ * @param userId - User ID
+ * @param currentPassword - Current password for verification
+ * @param newPassword - New password to set
+ * @returns Promise with success status and message
+ */
+export const changePassword = async (userId: string, currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+  try {
+    const user = await User.findById(userId).select('+password');
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+
+    // Verify current password using bcrypt
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return { success: false, message: 'The current password you entered is incorrect.' };
+    }
+
+    // Check if new password is same as current
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      return { success: false, message: 'New password cannot be the same as the current password.' };
+    }
+
+    // Update password
+    // Hash new password before saving
+  user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    await user.save();
+
+    return { success: true, message: 'Password changed successfully.' };
+  } catch (error) {
+    console.error('Change password error:', error);
+    return { success: false, message: 'An error occurred while changing password.' };
+  }
+};
+
+export const updateProfile = async (userId: string, updateData: { username?: string; email?: string; avatar?: string }): Promise<AuthResponse> => {
+  // Find the user by ID
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  // Check if email is being updated and if it already exists
+  if (updateData.email && updateData.email !== user.email) {
+    const emailExists = await User.findOne({ email: updateData.email });
+    if (emailExists) {
+      throw new Error('Email already in use');
+    }
+  }
+
+  // Check if username is being updated and if it already exists
+  if (updateData.username && updateData.username !== user.username) {
+    const usernameExists = await User.findOne({ username: updateData.username });
+    if (usernameExists) {
+      throw new Error('Username already taken');
+    }
+  }
+
+  // Update user fields
+  if (updateData.username) user.username = updateData.username;
+  if (updateData.email) user.email = updateData.email;
+  if (updateData.avatar) user.avatar = updateData.avatar;
+
+  // Save the updated user
+  const updatedUser = await user.save();
+  
+  // Generate new token with updated user data
+  const token = generateToken(updatedUser);
+  
+  return formatUserResponse(updatedUser, token);
+};
+
+/**
+ * Permanently deletes a user account
+ * @param userId - The ID of the user to delete
+ * @returns Promise with success status and message
+ */
+export const deleteUser = async (userId: string): Promise<{ success: boolean; message: string }> => {
+  try {
+    const result = await User.findByIdAndDelete(userId);
+    
+    if (!result) {
+      return { success: false, message: 'User not found' };
+    }
+    
+    // Here you could add additional cleanup logic if needed
+    // For example, deleting related data in other collections
+    
+    return { 
+      success: true, 
+      message: 'Account deleted successfully' 
+    };
+  } catch (error) {
+    console.error('Error deleting user account:', error);
+    throw new Error('Failed to delete account. Please try again later.');
+  }
+};
+
 export const resetPassword = async (token: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
   try {
     // 1. Find user by reset token and check if token is not expired
@@ -224,7 +332,8 @@ export const resetPassword = async (token: string, newPassword: string): Promise
     }
 
     // 2. Update password
-    user.password = newPassword;
+    // Hash new password before saving
+  user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
     user.resetToken = undefined;
     user.resetTokenExpires = undefined;
     

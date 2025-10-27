@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../../config/env';
 import { IUser } from './user.model'; // Make sure this path is correct
-import { register, login, getMe, forgotPassword, resetPassword } from './auth.service';
+import { register, login, getMe, forgotPassword, resetPassword, changePassword as changePasswordService, updateProfile, deleteUser } from './auth.service';
 import { AppError } from '../../middlewares/error.middleware';
 import asyncHandler from '../../middleware/async';
 
@@ -82,80 +82,117 @@ export const registerUser = asyncHandler(async (req: AuthRequest, res: Response,
 export const loginUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { email, password } = req.body;
 
-  // Check for missing fields
+  // Input validation
   if (!email || !password) {
     return res.status(400).json({
       success: false,
-      message: 'Email and password are required'
+      message: 'Please provide both email and password',
+      error: 'MISSING_CREDENTIALS'
+    });
+  }
+
+  // Email format validation
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Please provide a valid email address',
+      error: 'INVALID_EMAIL_FORMAT'
     });
   }
 
   try {
     const user = await login(email, password);
     
-    // Create secure cookie with token
-    const cookieOptions = {
+    // Generate JWT token
+    const token = generateToken(user);
+
+    // Prepare user data for response
+    const userObj = user && typeof user === 'object' ? 
+      (user.toObject ? user.toObject() : { ...user }) : {};
+      
+    const userWithoutPassword = { ...userObj };
+    delete userWithoutPassword.password;
+    delete userWithoutPassword.__v;
+
+    // Set secure HTTP-only cookie
+    res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict' as const,
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      path: '/',
-    };
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
 
-    res.cookie('token', user.token, cookieOptions);
-
-    // Return success response with token
-    res.status(201).json({
+    return res.status(200).json({
       success: true,
-      message: 'Login successful',
-      token: user.token,
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        avatar: user.avatar,
-        role: user.role,
-        stats: user.stats
-      }
+      token,
+      data: userWithoutPassword,
+      message: 'Login successful'
     });
   } catch (error: any) {
-    // Handle specific error cases
-    if (error.message === 'No account found with this email') {
+    console.error('Login error:', error);
+    
+    // Handle specific error cases with appropriate status codes and messages
+    if (error.code === 'USER_NOT_FOUND') {
       return res.status(401).json({
         success: false,
-        message: 'No account found with this email'
+        message: 'No account found with this email',
+        error: 'USER_NOT_FOUND'
       });
     }
-    
-    if (error.message === 'Invalid password') {
+
+    if (error.code === 'INVALID_PASSWORD') {
       return res.status(401).json({
         success: false,
-        message: 'Invalid password'
+        message: 'Incorrect password',
+        error: 'INVALID_PASSWORD'
       });
     }
-    
-    // For any other errors, pass to the error handler
-    next(error);
+
+    if (error.code === 'MISSING_FIELDS') {
+      return res.status(400).json({
+        success: false,
+        message: error.message || 'Email and password are required',
+        error: 'MISSING_FIELDS'
+      });
+    }
+
+    // Handle database errors
+    if (error.name === 'MongoError' || error.name === 'MongoServerError') {
+      return res.status(503).json({
+        success: false,
+        message: 'Service temporarily unavailable. Please try again later.',
+        error: 'SERVICE_UNAVAILABLE'
+      });
+    }
+
+    // Default error response
+    return res.status(500).json({
+      success: false,
+      message: 'An error occurred during login. Please try again later.',
+      error: 'SERVER_ERROR'
+    });
   }
 });
 
-// @desc    Get current logged in user data
+// @desc    Get current user profile
 // @route   GET /api/auth/me
 // @access  Private
 export const getMeHandler = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
-  if (!req.user) {
-    return next(new AppError('Not authorized to access this route', 401));
+  if (!req.user?._id) {
+    return next(new AppError('User not authenticated', 401));
   }
-
-  try {
-    const user = await getMe(req.user._id);
-    res.status(200).json({
-      success: true,
-      data: user
-    });
-  } catch (error) {
-    next(error);
+  
+  const user = await getMe(req.user._id.toString());
+  
+  if (!user) {
+    return next(new AppError('User not found', 404));
   }
+  
+  return res.status(200).json({
+    success: true,
+    data: user
+  });
 });
 
 // @desc    Logout user / clear cookie
@@ -244,6 +281,7 @@ export const googleAuthFailure = (_req: Request, res: Response) => {
     success: false,
     message: 'Google authentication failed',
   });
+  return; // Explicit return to satisfy TypeScript
 };
 
 // @desc    Forgot Password
@@ -279,19 +317,107 @@ export const requestPasswordReset = asyncHandler(async (req: Request, res: Respo
 export const resetPasswordHandler = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { token, newPassword } = req.body;
 
-  // Validate input
   if (!token || !newPassword) {
     return next(new AppError('Token and new password are required', 400));
   }
 
-  // Validate password length
-  if (newPassword.length < 6) {
-    return next(new AppError('Password must be at least 6 characters long', 400));
-  }
-
-  // Call the reset password service
   const result = await resetPassword(token, newPassword);
   
+  if (!result.success) {
+    return next(new AppError(result.message, 400));
+  }
+
+  res.status(200).json({
+    success: true,
+    message: result.message
+  });
+});
+
+// @desc    Change user password
+// @route   POST /api/auth/change-password
+// @access  Private
+// @desc    Update user profile
+// @route   PATCH /api/user/profile
+// @access  Private
+export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
+  const { username, email, avatar } = req.body;
+  
+  // Validate request body
+  if (!username && !email && !avatar) {
+    return next(new AppError('At least one field (username, email, or avatar) is required to update profile', 400));
+  }
+
+  try {
+    const updatedUser = await updateProfile(req.user!.id, { username, email, avatar });
+    
+    res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      data: {
+        userId: updatedUser.id,
+        username: updatedUser.username,
+        email: updatedUser.email,
+        avatar: updatedUser.avatar
+      }
+    });
+  } catch (error: any) {
+    if (error.message === 'Email already in use' || error.message === 'Username already taken') {
+      return next(new AppError(error.message, 400));
+    }
+    return next(new AppError('Failed to update profile', 500));
+  }
+});
+
+// @desc    Change user password
+// @route   PATCH /api/auth/change-password
+// @access  Private
+// @desc    Delete user account permanently
+// @route   DELETE /api/user/delete
+// @access  Private
+export const deleteUserAccount = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return next(new AppError('User not authenticated', 401));
+  }
+
+  try {
+    const result = await deleteUser(userId);
+    
+    if (!result.success) {
+      return next(new AppError(result.message, 404));
+    }
+
+    // Clear the JWT cookie if using cookie-based auth
+    res.clearCookie('jwt');
+
+    res.status(200).json({
+      success: true,
+      message: 'Account deleted successfully'
+    });
+  } catch (error: any) {
+    console.error('Error deleting account:', error);
+    return next(new AppError('Failed to delete account. Please try again later.', 500));
+  }
+});
+
+// @desc    Change user password
+// @route   PATCH /api/auth/change-password
+// @access  Private
+export const changePassword = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
+  const { currentPassword, newPassword } = req.body;
+  const userId = req.user?._id;
+
+  if (!userId) {
+    return next(new AppError('User not authenticated', 401));
+  }
+
+  if (!currentPassword || !newPassword) {
+    return next(new AppError('Current password and new password are required', 400));
+  }
+
+  const result = await changePasswordService(userId.toString(), currentPassword, newPassword);
+
   if (!result.success) {
     return next(new AppError(result.message, 400));
   }
