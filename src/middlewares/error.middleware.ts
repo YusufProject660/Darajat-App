@@ -1,85 +1,85 @@
 import { Request, Response, NextFunction } from 'express';
+import { AppError, IErrorResponse } from '../utils/appError';
 
-class AppError extends Error {
-  statusCode: number;
-  isOperational: boolean;
+const handleCastErrorDB = (err: any): AppError => {
+  const message = `Invalid ${err.path}: ${err.value}`;
+  return new AppError(message, 400, 'INVALID_INPUT');
+};
 
-  constructor(message: string, statusCode: number, isOperational = true) {
-    super(message);
-    this.statusCode = statusCode;
-    this.isOperational = isOperational;
-    Error.captureStackTrace(this, this.constructor);
+const handleDuplicateFieldsDB = (err: any): AppError => {
+  const value = err.errmsg?.match(/(["'].*["'])/)?.[0] || 'a document';
+  const message = `Duplicate field value: ${value}. Please use another value!`;
+  return new AppError(message, 400, 'DUPLICATE_FIELD');
+};
+
+const handleValidationErrorDB = (err: any): AppError => {
+  const errors = Object.values(err.errors).map((el: any) => el.message);
+  const message = `Invalid input data. ${errors.join('. ')}`;
+  return new AppError(message, 400, 'VALIDATION_ERROR', true, errors);
+};
+
+const handleJWTError = (): AppError =>
+  new AppError('Invalid token. Please log in again!', 401, 'INVALID_TOKEN');
+
+const handleJWTExpiredError = (): AppError =>
+  new AppError('Your token has expired! Please log in again.', 401, 'TOKEN_EXPIRED');
+
+const sendError = (err: AppError, req: Request, res: Response) => {
+  // Log error in development
+  if (process.env.NODE_ENV === 'development') {
+    console.error('Error:', {
+      status: err.statusCode,
+      message: err.message,
+      stack: err.stack,
+      ...(err.details && { details: err.details })
+    });
   }
-}
 
-const errorHandler = (
+  // Send error response
+  res.status(err.statusCode).json({
+    success: false,
+    error: {
+      message: err.message,
+      ...(err.code && { code: err.code }),
+      ...(err.details && { details: err.details }),
+      ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    }
+  } as IErrorResponse);
+};
+
+export const globalErrorHandler = (
   err: any,
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ) => {
-  console.error('Error:', err);
+  let error = { ...err };
+  error.message = err.message;
+  error.stack = err.stack;
 
-  // If the error is already an instance of AppError, use it
-  if (err instanceof AppError) {
-    return res.status(err.statusCode).json({
-      success: false,
-      message: err.message,
-      error: process.env.NODE_ENV === 'development' ? err.stack : {}
-    });
-  }
+  // Handle specific error types
+  if (err.name === 'CastError') error = handleCastErrorDB(err);
+  if (err.code === 11000) error = handleDuplicateFieldsDB(err);
+  if (err.name === 'ValidationError') error = handleValidationErrorDB(err);
+  if (err.name === 'JsonWebTokenError') error = handleJWTError();
+  if (err.name === 'TokenExpiredError') error = handleJWTExpiredError();
 
-  // Handle JWT errors
-  if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid token',
-    });
-  }
+  // Default to 500 if status code not set
+  error.statusCode = error.statusCode || 500;
+  error.message = error.message || 'Internal Server Error';
 
-  // Handle JWT expired error
-  if (err.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      success: false,
-      message: 'Token has expired',
-    });
-  }
-
-  // Handle MongoDB validation errors
-  if (err.name === 'ValidationError') {
-    const messages = Object.values(err.errors).map((val: any) => val.message);
-    return res.status(400).json({
-      success: false,
-      message: 'Validation error',
-      errors: messages,
-    });
-  }
-
-  // Handle duplicate key errors (MongoDB duplicate key)
-  if (err.code === 11000) {
-    const field = Object.keys(err.keyValue || {})[0] || 'field';
-    return res.status(400).json({
-      success: false,
-      message: `${field} already exists`,
-    });
-  }
-
-  // Default error handler
-  console.error('Unexpected error:', err);
-  return res.status(500).json({
-    success: false,
-    message: 'Internal server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : {}
-  });
+  sendError(error, req, res);
 };
-
 
 // 404 Not Found handler
-const notFound = (req: Request, res: Response) => {
+export const notFoundHandler = (req: Request, res: Response) => {
   res.status(404).json({
     success: false,
-    message: `Not Found - ${req.originalUrl}`
+    error: {
+      message: `Can't find ${req.originalUrl} on this server!`,
+      code: 'NOT_FOUND'
+    }
   });
 };
 
-export { errorHandler, AppError, notFound };
+export default globalErrorHandler;

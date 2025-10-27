@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
-import { ErrorResponse } from '../../utils/errorResponse';
+import { AppError } from '../../utils/appError';
 import { GameRoom, IPlayer } from './models/gameRoom.model';
 import { Deck } from './models/deck.model';
 import User from '../users/user.model';
@@ -40,7 +40,7 @@ const toObjectId = (id: string | mongoose.Types.ObjectId) =>
 export const createGame = async (req: IRequestWithUser, res: Response, next: NextFunction) => {
   try {
     if (!req.user) {
-      return next(new ErrorResponse('User not authenticated', 401));
+      return next(new AppError('User not authenticated', 401));
     }
 
     // Define valid difficulties
@@ -52,7 +52,7 @@ export const createGame = async (req: IRequestWithUser, res: Response, next: Nex
 
     // Validate request
     if (!requestCategories || Object.keys(requestCategories).length === 0) {
-      return next(new ErrorResponse('At least one category must be specified', 400));
+      return next(new AppError('At least one category must be specified', 400));
     }
 
     // Process categories with case-insensitive matching
@@ -72,7 +72,7 @@ export const createGame = async (req: IRequestWithUser, res: Response, next: Nex
       });
 
     if (enabledCategories.length === 0) {
-      return next(new ErrorResponse('No valid categories enabled', 400));
+      return next(new AppError('No valid categories enabled', 400));
     }
 
     console.log('Processing categories:', enabledCategories);
@@ -87,7 +87,7 @@ export const createGame = async (req: IRequestWithUser, res: Response, next: Nex
     }).lean();
 
     if (decks.length === 0) {
-      return next(new ErrorResponse('No decks found for the requested categories', 400));
+      return next(new AppError('No decks found for the requested categories', 400));
     }
 
     console.log(`Found ${decks.length} decks for categories: ${categoryNames.join(', ')}`);
@@ -169,7 +169,7 @@ export const createGame = async (req: IRequestWithUser, res: Response, next: Nex
 
     // If no questions found in any category, return error
     if (allQuestions.length === 0) {
-      return next(new ErrorResponse('No questions found in any of the selected categories', 400));
+      return next(new AppError('No questions found in any of the selected categories', 400));
     }
 
     // Distribute questions fairly among categories
@@ -206,7 +206,7 @@ export const createGame = async (req: IRequestWithUser, res: Response, next: Nex
           ? `Available categories with questions: ${availableCategories.join(', ')}` 
           : 'No questions found in any category. Please check if the decks have questions.');
       
-      return next(new ErrorResponse(errorMessage, 400));
+      return next(new AppError(errorMessage, 400));
     }
 
     // Shuffle and limit questions
@@ -255,7 +255,7 @@ export const createGame = async (req: IRequestWithUser, res: Response, next: Nex
 
   } catch (error) {
     console.error('Error in createGame:', error);
-    next(new ErrorResponse('Failed to create game room', 500));
+    next(new AppError('Failed to create game room', 500));
   }
 };
 
@@ -275,7 +275,7 @@ export const joinGame = async (req: IRequestWithUser, res: Response, next: NextF
   
   try {
     if (!req.user) {
-      return next(new ErrorResponse('User not authenticated', 401));
+      return next(new AppError('User not authenticated', 401));
     }
 
     const { roomCode } = req.body;
@@ -288,13 +288,13 @@ export const joinGame = async (req: IRequestWithUser, res: Response, next: NextF
     
     if (!gameRoom) {
       await session.abortTransaction();
-      return next(new ErrorResponse('Invalid room code or game not available', 404));
+      return next(new AppError('Invalid room code or game not available', 404));
     }
 
     // Check if game is joinable
     if (gameRoom.status !== 'waiting') {
       await session.abortTransaction();
-      return next(new ErrorResponse('Game is not accepting new players', 400));
+      return next(new AppError('Game is not accepting new players', 400));
     }
 
     // Check if already joined
@@ -304,13 +304,13 @@ export const joinGame = async (req: IRequestWithUser, res: Response, next: NextF
 
     if (alreadyJoined) {
       await session.abortTransaction();
-      return next(new ErrorResponse('You have already joined this game', 400));
+      return next(new AppError('You have already joined this game', 400));
     }
 
     // Check if room is full
     if (gameRoom.players.length >= gameRoom.settings.maximumPlayers) {
       await session.abortTransaction();
-      return next(new ErrorResponse('Game room is full', 400));
+      return next(new AppError('Game room is full', 400));
     }
 
     // Add player to the game
@@ -359,7 +359,7 @@ export const getGameRoom = async (req: Request, res: Response, next: NextFunctio
       .lean();
 
     if (!gameRoom) {
-      return next(new ErrorResponse('Game room not found', 404));
+      return next(new AppError('Game room not found', 404));
     }
 
     // Get the first enabled category and its difficulty
@@ -368,7 +368,7 @@ export const getGameRoom = async (req: Request, res: Response, next: NextFunctio
     );
 
     if (!enabledCategory) {
-      return next(new ErrorResponse('No enabled categories found', 400));
+      return next(new AppError('No enabled categories found', 400));
     }
 
     const [category, settings] = enabledCategory;
@@ -510,7 +510,7 @@ export const leaveGame = async (req: ILeaveGameRequest, res: Response, next: Nex
   const userId = req.user?._id;
 
   if (!userId) {
-    return next(new ErrorResponse('User not authenticated', 401));
+    return next(new AppError('User not authenticated', 401));
   }
 
   try {
@@ -574,7 +574,7 @@ export const leaveGame = async (req: ILeaveGameRequest, res: Response, next: Nex
 
   } catch (error) {
     console.error('Leave game error:', error);
-    next(new ErrorResponse('Failed to leave game room', 500));
+    next(new AppError('Failed to leave game room', 500));
   }
 };
 
@@ -605,13 +605,13 @@ interface ISubmitAnswerRequest extends Request {
     if (!roomCode || !questionId || selectedOption === undefined || timeTaken === undefined) {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorResponse('Missing required fields', 400));
+      return next(new AppError('Missing required fields', 400));
     }
 
     if (!userId) {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorResponse('User not authenticated', 401));
+      return next(new AppError('User not authenticated', 401));
     }
 
     // Find the game room
@@ -619,14 +619,14 @@ interface ISubmitAnswerRequest extends Request {
     if (!gameRoom) {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorResponse('Game room not found', 404));
+      return next(new AppError('Game room not found', 404));
     }
 
     // Check if game is active
     if (gameRoom.status !== 'active') {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorResponse('Game is not active', 400));
+      return next(new AppError('Game is not active', 400));
     }
 
     // Check if user is a player in this game
@@ -634,7 +634,7 @@ interface ISubmitAnswerRequest extends Request {
     if (!player) {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorResponse('You are not a player in this game', 403));
+      return next(new AppError('You are not a player in this game', 403));
     }
 
     // Check if the question exists in this game
@@ -642,7 +642,7 @@ interface ISubmitAnswerRequest extends Request {
     if (!gameRoom.questions.some(q => q.toString() === questionId)) {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorResponse('Question not found in this game', 404));
+      return next(new AppError('Question not found in this game', 404));
     }
 
     // Check if player already answered this question
@@ -654,7 +654,7 @@ interface ISubmitAnswerRequest extends Request {
     if (alreadyAnswered) {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorResponse('You have already answered this question', 400));
+      return next(new AppError('You have already answered this question', 400));
     }
 
     // Get the question details
@@ -662,7 +662,7 @@ interface ISubmitAnswerRequest extends Request {
     if (!question) {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorResponse('Question not found', 404));
+      return next(new AppError('Question not found', 404));
     }
 
     // Check if time has expired (assuming question has a timer in seconds)
@@ -670,7 +670,7 @@ interface ISubmitAnswerRequest extends Request {
     if (timeTaken > questionTimer) {
       await session.abortTransaction();
       session.endSession();
-      return next(new ErrorResponse('Time\'s up!', 400));
+      return next(new AppError('Time\'s up!', 400));
     }
 
     // Check if answer is correct
@@ -739,7 +739,7 @@ export const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: 
     const userId = req.user?._id;
 
     if (!userId) {
-      return next(new ErrorResponse('User not authenticated', 401));
+      return next(new AppError('User not authenticated', 401));
     }
 
     const gameRoom = await GameRoom.findOne({ roomCode })
@@ -748,7 +748,7 @@ export const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: 
       .lean();
 
     if (!gameRoom) {
-      return next(new ErrorResponse('Game room not found', 404));
+      return next(new AppError('Game room not found', 404));
     }
 
     // Check if user is a participant
@@ -757,7 +757,7 @@ export const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: 
     );
 
     if (!isParticipant) {
-      return next(new ErrorResponse('You are not a participant in this game', 403));
+      return next(new AppError('You are not a participant in this game', 403));
     }
 
     res.status(200).json({
@@ -801,7 +801,7 @@ export const getGameSummary = async (req: Request, res: Response, next: NextFunc
     const userId = req.user?._id;
 
     if (!userId) {
-      return next(new ErrorResponse('User not authenticated', 401));
+      return next(new AppError('User not authenticated', 401));
     }
 
     // Fetch game room with populated questions and answeredQuestions
@@ -818,7 +818,7 @@ export const getGameSummary = async (req: Request, res: Response, next: NextFunc
       .lean();
 
     if (!gameRoom) {
-      return next(new ErrorResponse('Game not found', 404));
+      return next(new AppError('Game not found', 404));
     }
 
     if (gameRoom.status !== 'finished') {
@@ -937,7 +937,7 @@ export const getGameSummary = async (req: Request, res: Response, next: NextFunc
 
   } catch (error) {
     console.error('Error getting game summary:', error);
-    next(new ErrorResponse('Server error', 500));
+    next(new AppError('Server error', 500));
   }
 };
 
@@ -960,7 +960,7 @@ export const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Resp
     const userId = req.user?._id;
 
     if (!userId) {
-      return next(new ErrorResponse('User not authenticated', 401));
+      return next(new AppError('User not authenticated', 401));
     }
 
     // Find the game room
@@ -1090,7 +1090,7 @@ export const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Resp
     await session.abortTransaction();
     session.endSession();
     console.error('Error finishing game:', error);
-    next(new ErrorResponse('Failed to finish game', 500));
+    next(new AppError('Failed to process answer', 500));
   }
 };
 
@@ -1164,7 +1164,7 @@ export const finishGame = async (req: IFinishGameRequest, res: Response, next: N
         message: `Game '${roomCode}' is not in a finishable state. Current status: ${gameRoom.status}`,
         statusCode: 400
       });
-      return next(new ErrorResponse(
+      return next(new AppError(
         `Game '${roomCode}' is not in a finishable state. Current status: ${gameRoom.status}`,
         400
       ));

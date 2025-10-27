@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { body, validationResult, ValidationChain } from 'express-validator';
-import { ErrorResponse } from '../../../utils/errorResponse';
+import { AppError } from '../../../utils/appError';
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
 const CATEGORIES = ['Sawm',' Salah','Prophets','Fiqh'] as const;
@@ -33,10 +33,18 @@ const createGameValidations: ValidationChain[] = [
         throw new Error('Categories must be an object');
       }
       
+      // Define a type for the raw category config from the request
+      type RawCategoryConfig = {
+        enabled?: boolean | string;
+        Enabled?: boolean | string;
+        difficulty?: string;
+        Difficulty?: string;
+      };
+
       // Check for at least one enabled category
-      const hasEnabledCategory = Object.values(categories).some(config => {
+      const hasEnabledCategory = Object.values(categories as Record<string, RawCategoryConfig>).some(config => {
         if (!config || typeof config !== 'object') return false;
-        const enabled = config.enabled || config.Enabled;
+        const enabled = config.enabled ?? config.Enabled;
         return enabled === true || enabled === 'true';
       });
       
@@ -47,9 +55,9 @@ const createGameValidations: ValidationChain[] = [
       // Store the sanitized categories in the request for later use
       const sanitizedCategories: Record<string, CategoryConfig> = {};
       
-      for (const [category, config] of Object.entries(categories)) {
+      for (const [category, config] of Object.entries(categories as Record<string, RawCategoryConfig>)) {
         if (config && typeof config === 'object') {
-          const enabled = !!config.enabled || config.Enabled === true;
+          const enabled = !!config.enabled || config.Enabled === true || config.Enabled === 'true';
           const difficulty = (config.difficulty || config.Difficulty || 'medium')
             .toString()
             .toLowerCase() as Difficulty;
@@ -110,9 +118,10 @@ const handleValidationErrors: RequestHandler = (req: Request, _res: Response, ne
         ? errorMessages[0].message 
         : 'Multiple validation errors occurred';
       
-      return next(new ErrorResponse(
+      return next(new AppError(
         errorMessage,
         400,
+        true,
         errorMessages.length > 1 ? errorMessages : undefined
       ));
     }
@@ -120,7 +129,7 @@ const handleValidationErrors: RequestHandler = (req: Request, _res: Response, ne
     next();
   } catch (error) {
     console.error('Error in validation middleware:', error);
-    next(new ErrorResponse('An error occurred during validation', 500));
+    next(new AppError('An error occurred during validation', 500));
   }
 };
 

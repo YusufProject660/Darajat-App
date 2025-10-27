@@ -95,6 +95,14 @@ export const login = async (email: string, password: string): Promise<AuthRespon
     throw error;
   }
 
+  // Check if this is an OAuth user trying to log in with password
+  if (user.isOAuthUser || !user.password) {
+    const error = new Error('This account uses OAuth for authentication. Please sign in with your OAuth provider.') as any;
+    error.statusCode = 401;
+    error.code = 'OAUTH_ACCOUNT';
+    throw error;
+  }
+
   // Secure password comparison using bcrypt
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) {
@@ -141,7 +149,7 @@ export const googleAuth = async (profile: any): Promise<AuthResponse> => {
   let user = await User.findOne({ googleId: profile.id });
 
   if (!user) {
-      // Create new user with Google auth and plain text password
+      // Create new OAuth user without a password
     user = await User.create({
       googleId: profile.id,
       email: profile.emails?.[0]?.value,
@@ -153,7 +161,9 @@ export const googleAuth = async (profile: any): Promise<AuthResponse> => {
         accuracy: 0,
         bestScore: 0
       },
-      password: 'google_oauth_user' // Simple password for Google auth users
+      // Mark as OAuth user and set auth provider
+      authProvider: 'google',
+      isOAuthUser: true
     });
   }
 
@@ -175,6 +185,14 @@ export const forgotPassword = async (email: string): Promise<{ success: boolean;
     if (!user) {
       // Return success to prevent email enumeration
       return FORGOT_PASSWORD_RESPONSE;
+    }
+
+    // Check if this is an OAuth user (they don't have passwords to reset)
+    if (user.isOAuthUser || !user.password) {
+      return {
+        success: true,
+        message: 'This account uses OAuth for authentication. Please sign in with your OAuth provider.'
+      };
     }
 
     // 2. Generate reset token
@@ -229,6 +247,14 @@ export const changePassword = async (userId: string, currentPassword: string, ne
       return { success: false, message: 'User not found' };
     }
 
+    // Check if this is an OAuth user
+    if (user.isOAuthUser || !user.password) {
+      return { 
+        success: false, 
+        message: 'This account uses OAuth for authentication. Please use the OAuth provider to sign in.' 
+      };
+    }
+
     // Verify current password using bcrypt
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
@@ -242,14 +268,49 @@ export const changePassword = async (userId: string, currentPassword: string, ne
     }
 
     // Update password
-    // Hash new password before saving
-  user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
     await user.save();
 
     return { success: true, message: 'Password changed successfully.' };
   } catch (error) {
     console.error('Change password error:', error);
     return { success: false, message: 'An error occurred while changing password.' };
+  }
+};
+
+/**
+ * Set password for OAuth users who want to enable email/password login
+ */
+export const setPassword = async (userId: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+  try {
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+
+    // Only allow setting password for OAuth users who don't have a password
+    if (!user.isOAuthUser || user.password) {
+      return { 
+        success: false, 
+        message: 'Password cannot be set for this account.' 
+      };
+    }
+
+    // Update user to email/password auth
+    user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    user.isOAuthUser = false;
+    user.authProvider = 'email';
+    
+    await user.save();
+
+    return { 
+      success: true, 
+      message: 'Password set successfully. You can now log in with your email and password.' 
+    };
+  } catch (error) {
+    console.error('Set password error:', error);
+    return { success: false, message: 'An error occurred while setting password.' };
   }
 };
 

@@ -23,7 +23,7 @@ export interface IUser extends Document {
   _id: Schema.Types.ObjectId;
   username: string;
   email: string;
-  password: string;
+  password?: string; // Make password optional for OAuth users
   avatar?: string;
   googleId?: string;
   stats: {
@@ -34,6 +34,8 @@ export interface IUser extends Document {
   role: 'player' | 'admin';
   resetToken?: string;
   resetTokenExpires?: Date;
+  authProvider?: 'google' | 'email';
+  isOAuthUser?: boolean;
   createdAt: Date;
   updatedAt: Date;
   matchPassword(enteredPassword: string): Promise<boolean>;
@@ -62,21 +64,30 @@ const userSchema = new Schema<IUser>(
     password: {
       type: String,
       required: [
-        function() { return !this.googleId; },
-        'Password is required for non-Google users'
+        function(this: IUser) {
+          return !(this.googleId || this.isOAuthUser); // Not required for OAuth users
+        },
+        'Please add a password'
       ],
-      minlength: 6,
-      select: false,
+      minlength: [6, 'Password must be at least 6 characters'],
+      select: false, // Don't return password by default
       validate: {
         validator: function(value: string) {
-          // Password is required only if googleId is not present
-          if (!this.googleId && (!value || value.length === 0)) {
-            return false;
-          }
-          return true;
+          // Skip validation if this is an OAuth user
+          if (this.isOAuthUser || this.googleId) return true;
+          return value && value.length >= 6;
         },
-        message: 'Password is required for non-Google users'
+        message: 'Password is required for email/password users'
       }
+    },
+    authProvider: {
+      type: String,
+      enum: ['google', 'email'],
+      default: 'email'
+    },
+    isOAuthUser: {
+      type: Boolean,
+      default: false
     },
     avatar: {
       type: String
@@ -140,7 +151,10 @@ userSchema.pre('save', async function(next) {
 
 // Method to compare password
 userSchema.methods.matchPassword = async function(enteredPassword: string): Promise<boolean> {
-  if (!this.password) return false; // For OAuth users without password
+  // For OAuth users without password
+  if (this.isOAuthUser || !this.password) {
+    throw new Error('This account uses OAuth for authentication. Please sign in with your OAuth provider.');
+  }
   return bcrypt.compare(enteredPassword, this.password);
 };
 
