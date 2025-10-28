@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { Dashboard } from './dashboard.model';
-import { DashboardGame } from './models/dashboard-game.model';
 
 interface IDashboardData {
   banner: {
@@ -13,26 +12,34 @@ interface IDashboardData {
     joinGameText: string;
     howToPlayLink: string;
   };
+  funGames: Array<{
+    id: string;
+    title: string;
+    description: string;
+    image: string;
+    status: 'available' | 'coming_soon' | 'maintenance';
+  }>;
 }
 
+/**
+ * @desc    Get dashboard data (banner, games, actions)
+ * @route   GET /api/dashboard
+ * @access  Private (JWT required)
+ */
 export const getDashboardData = async (_req: Request, res: Response): Promise<void> => {
   try {
-    // Fetch dashboard data
-    const dashboardData = await Dashboard.findOne({}).lean<IDashboardData>();
+    // Fetch dashboard data with embedded games
+    const dashboardData = await Dashboard.findOne({})
+      .select('banner actions funGames')
+      .lean<IDashboardData>();
     
     if (!dashboardData) {
       res.status(404).json({
         success: false,
-        message: 'Dashboard configuration not found'
+        message: 'Dashboard configuration not found.'
       });
       return;
     }
-
-    // Fetch games data
-    const games = await DashboardGame.find(
-      {},
-      { _id: 0, __v: 0, createdAt: 0, updatedAt: 0 }
-    ).lean();
 
     // Prepare response
     const response = {
@@ -40,7 +47,7 @@ export const getDashboardData = async (_req: Request, res: Response): Promise<vo
       message: 'Dashboard data fetched successfully',
       data: {
         banner: dashboardData.banner,
-        funGames: games,
+        funGames: dashboardData.funGames || [],
         actions: dashboardData.actions
       }
     };

@@ -46,21 +46,30 @@ const formatUserResponse = (user: IUser, token: string): AuthResponse => ({
   token
 });
 
-export const register = async (username: string, email: string, password: string): Promise<AuthResponse> => {
+export const register = async (username: string, email: string, password: string, confirmPassword?: string): Promise<AuthResponse> => {
+  console.log('Registering user:', { username, email });
+  
   // Check if user exists
   const userExists = await User.findOne({ $or: [{ email }, { username }] });
   if (userExists) {
     throw new Error('User with this email or username already exists');
   }
 
-  // Hash password before saving
-  const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+  // Validate password
+  if (!password) {
+    throw new Error('Password is required');
+  }
   
-  // Create user with hashed password and default stats
+  if (password.length < 6) {
+    throw new Error('Password must be at least 6 characters long');
+  }
+
+  // Create user with plain password - the pre-save hook will handle hashing
+  console.log('Creating user in database...');
   const user = await User.create({
     username,
     email,
-    password: hashedPassword,
+    password: password, // Let the pre-save hook handle hashing
     role: 'player',
     stats: {
       gamesPlayed: 0,
@@ -73,11 +82,15 @@ export const register = async (username: string, email: string, password: string
     throw new Error('Failed to create user');
   }
   
+  console.log('User created successfully:', { userId: user._id, email: user.email });
+  
   const token = generateToken(user);
   return formatUserResponse(user, token);
 };
 
 export const login = async (email: string, password: string): Promise<AuthResponse> => {
+  console.log('Login attempt for email:', email);
+  
   // Validate input
   if (!email || !password) {
     const error = new Error('Email and password are required') as any;
@@ -87,13 +100,18 @@ export const login = async (email: string, password: string): Promise<AuthRespon
   }
 
   // Check if user exists
+  console.log('Looking for user with email:', email);
   const user = await User.findOne({ email }).select('+password');
+  
   if (!user) {
+    console.log('No user found with email:', email);
     const error = new Error('No account found with this email') as any;
     error.statusCode = 401;
     error.code = 'USER_NOT_FOUND';
     throw error;
   }
+  
+  console.log('User found, checking password...');
 
   // Check if this is an OAuth user trying to log in with password
   if (user.isOAuthUser || !user.password) {
@@ -104,12 +122,38 @@ export const login = async (email: string, password: string): Promise<AuthRespon
   }
 
   // Secure password comparison using bcrypt
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (!isMatch) {
-    const error = new Error('Invalid email or password') as any;
-    error.statusCode = 401;
-    error.code = 'INVALID_CREDENTIALS';
-    throw error;
+  console.log('Input password:', password);
+  console.log('Stored password hash:', user.password);
+  
+  try {
+    // First try direct comparison (in case password is stored in plain text for some reason)
+    if (password === user.password) {
+      console.log('Password matched directly (not hashed)');
+    } else {
+      // Try bcrypt comparison
+      const isMatch = await bcrypt.compare(password, user.password);
+      console.log('Bcrypt compare result:', isMatch);
+      
+      if (!isMatch) {
+        // Try one more time with trimmed password (in case of whitespace issues)
+        const trimmedPassword = password.trim();
+        if (trimmedPassword !== password) {
+          const isTrimmedMatch = await bcrypt.compare(trimmedPassword, user.password);
+          console.log('Trimmed password compare result:', isTrimmedMatch);
+          if (!isTrimmedMatch) {
+            throw new Error('Password mismatch');
+          }
+        } else {
+          throw new Error('Password mismatch');
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Password comparison error:', error);
+    const authError = new Error('Invalid email or password') as any;
+    authError.statusCode = 401;
+    authError.code = 'INVALID_CREDENTIALS';
+    throw authError;
   }
 
   // Generate token and return user data

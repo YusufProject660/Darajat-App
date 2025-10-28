@@ -44,33 +44,47 @@ type AuthRequest = Request;
 // @access  Public
 export const registerUser = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
   const { email, password, confirmPassword } = req.body;
+  console.log('Register request received:', { email });
 
   // Validate required fields
   if (!email || !password || !confirmPassword) {
+    console.log('Missing required fields');
     return next(new AppError('Email, password, and confirmPassword are required.', 400));
   }
 
   // Check if passwords match
   if (password !== confirmPassword) {
+    console.log('Passwords do not match');
     return next(new AppError('Password and confirm password do not match.', 400));
   }
 
+  // Validate email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return next(new AppError('Please provide a valid email address', 400));
+  }
+
   try {
+    console.log('Attempting to register user:', email);
     // Use email as username for now
-    const user = await register(email, email, password);
+    const user = await register(email, email, password, confirmPassword);
     
+    console.log('User registered successfully:', email);
     return res.status(201).json({
       success: true,
       message: 'Sign up successful',
-      token: user.token
+      token: user.token,
+      data: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        role: user.role
+      }
     });
   } catch (error: any) {
-    if (error.message === 'User already exists') {
+    console.error('Registration error:', error);
+    if (error.message === 'User with this email or username already exists') {
       return next(new AppError('Email already registered.', 400));
-      return res.status(400).json({
-        success: false,
-        error: 'Email already registered.'
-      });
     }
     next(error);
   }
@@ -127,33 +141,26 @@ export const loginUser = asyncHandler(async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Login error:', error);
     
-    // Handle specific error cases with appropriate status codes and messages
-    if (error.code === 'USER_NOT_FOUND') {
+    // Handle specific error cases from auth service
+    if (error.code === 'INVALID_CREDENTIALS') {
       return res.status(401).json({
         success: false,
-        message: 'No account found with this email',
-        error: 'USER_NOT_FOUND'
+        message: 'Invalid email or password',
+        error: 'INVALID_CREDENTIALS'
       });
     }
 
-    if (error.code === 'INVALID_PASSWORD') {
+    if (error.code === 'OAUTH_ACCOUNT') {
       return res.status(401).json({
         success: false,
-        message: 'Incorrect password',
-        error: 'INVALID_PASSWORD'
-      });
-    }
-
-    if (error.code === 'MISSING_FIELDS') {
-      return res.status(400).json({
-        success: false,
-        message: error.message || 'Email and password are required',
-        error: 'MISSING_FIELDS'
+        message: error.message || 'This account uses OAuth for authentication. Please sign in with your OAuth provider.',
+        error: 'OAUTH_AUTH_REQUIRED'
       });
     }
 
     // Handle database errors
     if (error.name === 'MongoError' || error.name === 'MongoServerError') {
+      console.error('Database error during login:', error);
       return res.status(503).json({
         success: false,
         message: 'Service temporarily unavailable. Please try again later.',
@@ -161,11 +168,22 @@ export const loginUser = asyncHandler(async (req: Request, res: Response) => {
       });
     }
 
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error: ' + error.message,
+        error: 'VALIDATION_ERROR',
+        details: error.errors
+      });
+    }
+
     // Default error response
-    return res.status(500).json({
+    console.error('Unexpected login error:', error);
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: 'An error occurred during login. Please try again later.',
-      error: 'SERVER_ERROR'
+      message: error.message || 'An unexpected error occurred during login. Please try again later.',
+      error: error.code || 'INTERNAL_SERVER_ERROR'
     });
   }
 });

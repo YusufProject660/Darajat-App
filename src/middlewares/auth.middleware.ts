@@ -62,14 +62,21 @@ export const protect = async (
 
     // Convert to plain object and explicitly type it as IUser
     const userObj = user.toObject();
-    // Make sure the role is properly set on the user object
+    // Make sure the required fields are properly set on the user object
     req.user = {
       _id: userObj._id,
       id: userObj._id.toString(),
-      role: userObj.role || 'player', // Default to 'player' if role is not set
+      username: userObj.username, // Ensure username is included
       email: userObj.email,
+      avatar: userObj.avatar,     // Include avatar as it's used in game
+      role: userObj.role || 'player',
       password: userObj.password,
-      confirmPassword: userObj.confirmPassword
+      confirmPassword: userObj.confirmPassword,
+      stats: userObj.stats || {
+        gamesPlayed: 0,
+        accuracy: 0,
+        bestScore: 0
+      }
     } as IUser;
     return next();
   } catch (error) {

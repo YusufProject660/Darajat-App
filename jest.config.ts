@@ -6,7 +6,7 @@ const config: Config.InitialOptions = {
   roots: ['<rootDir>/src'],
   testMatch: [
     '**/__tests__/**/*.+(ts|tsx|js)',
-    '**/?(*.)+(spec|test).+(ts|tsx|js)'
+    '**/?(*.)+(spec|test).+(ts|tsx|js)',
   ],
   transform: {
     '^.+\\.(ts|tsx)$': 'ts-jest',
@@ -26,6 +26,14 @@ const config: Config.InitialOptions = {
       statements: 80,
     },
   },
+
+  // 🚫 Ignore helper and mock files so Jest doesn’t treat them as test suites
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '/dist/',
+    '/src/test/',
+  ],
+
   setupFilesAfterEnv: ['<rootDir>/src/test/setup.ts'],
   verbose: true,
 };
