@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { AppError } from '../../utils/appError';
-import { GameRoom, IPlayer } from './models/gameRoom.model';
+import { GameRoom, IPlayer, IAnsweredQuestion } from './models/gameRoom.model';
 import { Deck } from './models/deck.model';
 import User from '../users/user.model';
 import { Question } from './models/question.model';
@@ -19,13 +19,6 @@ interface IRequestWithUser extends Request {
   user?: IUser;
 }
 
-interface ICategorySettings {
-  [key: string]: {
-    enabled: boolean;
-    difficulty: 'easy' | 'medium' | 'hard';
-  };
-}
-
 
 
 /**
@@ -33,10 +26,6 @@ interface ICategorySettings {
  * @route   POST /api/game/create
  * @access  Private
  */
-// In game.controller.ts, update the createGame function with this improved version:
-const toObjectId = (id: string | mongoose.Types.ObjectId) =>
-  typeof id === "string" ? new mongoose.Types.ObjectId(id) : id;
-
 export const createGame = async (req: IRequestWithUser, res: Response, next: NextFunction) => {
   try {
     if (!req.user) {
@@ -57,11 +46,11 @@ export const createGame = async (req: IRequestWithUser, res: Response, next: Nex
 
     // Process categories with case-insensitive matching
     const enabledCategories = Object.entries(requestCategories)
-      .filter(([_, settings]) => {
+      .filter(([_, settings]: [string, any]) => {
         const enabled = settings?.enabled || settings?.Enabled;
         return enabled === true || enabled === 'true';
       })
-      .map(([category, settings]) => {
+      .map(([category, settings]: [string, any]) => {
         const difficulty = (settings?.difficulty || settings?.Difficulty || 'easy').toLowerCase();
         return {
           category: category.trim(),
@@ -93,7 +82,7 @@ export const createGame = async (req: IRequestWithUser, res: Response, next: Nex
     console.log(`Found ${decks.length} decks for categories: ${categoryNames.join(', ')}`);
 
     // Group decks by category for easier access
-    const decksByCategory = decks.reduce((acc, deck) => {
+    const decksByCategory = decks.reduce((acc: Record<string, any[]>, deck: any) => {
       const categories = [
         deck.category?.toLowerCase(),
         deck.name?.toLowerCase()
@@ -288,28 +277,32 @@ export const joinGame = async (req: IRequestWithUser, res: Response, next: NextF
     
     if (!gameRoom) {
       await session.abortTransaction();
+      session.endSession();
       return next(new AppError('Invalid room code or game not available', 404));
     }
 
     // Check if game is joinable
     if (gameRoom.status !== 'waiting') {
       await session.abortTransaction();
+      session.endSession();
       return next(new AppError('Game is not accepting new players', 400));
     }
 
     // Check if already joined
     const alreadyJoined = gameRoom.players.some(
-      player => player.userId.toString() === userId.toString()
+      (player: IPlayer) => player.userId.toString() === userId.toString()
     );
 
     if (alreadyJoined) {
       await session.abortTransaction();
+      session.endSession();
       return next(new AppError('You have already joined this game', 400));
     }
 
     // Check if room is full
     if (gameRoom.players.length >= gameRoom.settings.maximumPlayers) {
       await session.abortTransaction();
+      session.endSession();
       return next(new AppError('Game room is full', 400));
     }
 
@@ -333,7 +326,7 @@ export const joinGame = async (req: IRequestWithUser, res: Response, next: NextF
         roomCode: gameRoom.roomCode,
         categories: gameRoom.settings.categories,
         numberOfQuestions: gameRoom.settings.numberOfQuestions,
-        players: gameRoom.players.map(player => ({
+        players: gameRoom.players.map((player: IPlayer) => ({
           username: player.username,
           avatar: player.avatar
         })),
@@ -356,7 +349,7 @@ export const getGameRoom = async (req: Request, res: Response, next: NextFunctio
 
     const gameRoom = await GameRoom.findOne({ roomCode: code })
       .select('-questions') // Don't send questions in the initial room data
-      .lean();
+      .lean() as any;
 
     if (!gameRoom) {
       return next(new AppError('Game room not found', 404));
@@ -364,14 +357,14 @@ export const getGameRoom = async (req: Request, res: Response, next: NextFunctio
 
     // Get the first enabled category and its difficulty
     const enabledCategory = Object.entries(gameRoom.categories || {}).find(
-      ([, settings]) => settings.enabled
+      ([, settings]: [string, any]) => settings.enabled
     );
 
     if (!enabledCategory) {
       return next(new AppError('No enabled categories found', 400));
     }
 
-    const [category, settings] = enabledCategory;
+    const [category, settings]: [string, any] = enabledCategory;
     const difficulty = settings.difficulty;
 
     // Prepare the response
@@ -381,7 +374,7 @@ export const getGameRoom = async (req: Request, res: Response, next: NextFunctio
         ...gameRoom,
         category,
         difficulty,
-        players: gameRoom.players.map(player => ({
+        players: gameRoom.players.map((player: any) => ({
           userId: player.userId?._id,
           username: player.username || player.userId?.username,
           avatar: player.avatar || player.userId?.avatar
@@ -414,7 +407,7 @@ interface IGetQuestionsRequest extends Request {
  * @route   GET /api/game/questions/:roomCode
  * @access  Private
  */
-export const getQuestions = async (req: IGetQuestionsRequest, res: Response, next: NextFunction) => {
+export const getQuestions = async (req: IGetQuestionsRequest, res: Response) => {
   try {
     const { roomCode } = req.params;
     const userId = req.user?._id;
@@ -444,7 +437,7 @@ export const getQuestions = async (req: IGetQuestionsRequest, res: Response, nex
 
     // Check if user is a participant in this room
     const isParticipant = gameRoom.players.some(
-      (player) => player.userId.toString() === userId.toString()
+      (player: IPlayer) => player.userId.toString() === userId.toString()
     );
 
     if (!isParticipant) {
@@ -466,7 +459,7 @@ export const getQuestions = async (req: IGetQuestionsRequest, res: Response, nex
     console.log('Raw questions data:', JSON.stringify(gameRoom.questions, null, 2));
 
     // Format questions as per requirements
-    const formattedQuestions = gameRoom.questions.map((question: any, index) => {
+    const formattedQuestions = gameRoom.questions.map((question: any, index: number) => {
       // Log each question's available fields
       console.log(`Question ${index + 1} fields:`, Object.keys(question));
       
@@ -535,7 +528,7 @@ export const leaveGame = async (req: ILeaveGameRequest, res: Response, next: Nex
 
     // Find player index in the game room
     const playerIndex = gameRoom.players.findIndex(
-      player => player.userId.toString() === userId.toString()
+      (player: IPlayer) => player.userId.toString() === userId.toString()
     );
 
     // If player not found in the game
@@ -630,7 +623,7 @@ interface ISubmitAnswerRequest extends Request {
     }
 
     // Check if user is a player in this game
-    const player = gameRoom.players.find(p => p.userId.toString() === userId.toString());
+    const player = gameRoom.players.find((p: IPlayer) => p.userId.toString() === userId.toString());
     if (!player) {
       await session.abortTransaction();
       session.endSession();
@@ -638,8 +631,7 @@ interface ISubmitAnswerRequest extends Request {
     }
 
     // Check if the question exists in this game
-    const questionObjectId = new mongoose.Types.ObjectId(questionId);
-    if (!gameRoom.questions.some(q => q.toString() === questionId)) {
+    if (!gameRoom.questions.some((q: mongoose.Types.ObjectId) => q.toString() === questionId)) {
       await session.abortTransaction();
       session.endSession();
       return next(new AppError('Question not found in this game', 404));
@@ -647,7 +639,7 @@ interface ISubmitAnswerRequest extends Request {
 
     // Check if player already answered this question
     const alreadyAnswered = gameRoom.answeredQuestions?.some(
-      aq => aq.playerId.toString() === userId.toString() && 
+      (aq: IAnsweredQuestion) => aq.playerId.toString() === userId.toString() && 
             aq.questionId.toString() === questionId
     ) || false;
 
@@ -705,7 +697,7 @@ interface ISubmitAnswerRequest extends Request {
 
     // Prepare response
     const questionsAnswered = gameRoom.answeredQuestions.filter(
-      aq => aq.playerId.toString() === userId.toString()
+      (aq: IAnsweredQuestion) => aq.playerId.toString() === userId.toString()
     ).length;
 
     res.status(200).json({
@@ -745,7 +737,7 @@ export const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: 
     const gameRoom = await GameRoom.findOne({ roomCode })
       .select('-questions') // Don't send questions in the lobby
       .populate('players.userId', 'username avatar')
-      .lean();
+      .lean() as any;
 
     if (!gameRoom) {
       return next(new AppError('Game room not found', 404));
@@ -753,7 +745,7 @@ export const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: 
 
     // Check if user is a participant
     const isParticipant = gameRoom.players.some(
-      player => player.userId && player.userId._id.toString() === userId.toString()
+      (player: any) => player.userId && player.userId._id.toString() === userId.toString()
     );
 
     if (!isParticipant) {
@@ -764,31 +756,23 @@ export const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: 
       success: true,
       data: {
         roomCode: gameRoom.roomCode,
-        host: gameRoom.host,
+        host: gameRoom.host || gameRoom.hostId,
         status: gameRoom.status,
-        players: gameRoom.players.map(player => ({
+        players: gameRoom.players.map((player: any) => ({
           userId: player.userId?._id,
           username: player.username || (player.userId as any)?.username,
           avatar: player.avatar || (player.userId as any)?.avatar,
           score: player.score || 0
         })),
-        maxPlayers: gameRoom.maxPlayers,
+        maxPlayers: gameRoom.maxPlayers || gameRoom.settings?.maximumPlayers,
         currentPlayers: gameRoom.players.length,
-        gameSettings: gameRoom.gameSettings
+        gameSettings: gameRoom.gameSettings || gameRoom.settings
       }
     });
   } catch (error) {
     next(error);
   }
 };
-
-// Interface for game summary request
-interface IGameSummaryRequest extends Request {
-  params: {
-    roomCode: string;
-  };
-  user?: IUser;
-}
 
 /**
  * @desc    Get game summary for the logged-in user
@@ -815,7 +799,7 @@ export const getGameSummary = async (req: Request, res: Response, next: NextFunc
         path: 'answeredQuestions.questionId',
         select: 'text question options correctAnswer explanation'
       })
-      .lean();
+      .lean() as any;
 
     if (!gameRoom) {
       return next(new AppError('Game not found', 404));
@@ -828,7 +812,7 @@ export const getGameSummary = async (req: Request, res: Response, next: NextFunc
       });
     }
 
-    const player = gameRoom.players.find(p => 
+    const player = gameRoom.players.find((p: any) => 
       p.userId && p.userId.toString() === userId.toString()
     );
     
@@ -985,7 +969,7 @@ export const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Resp
     }
 
     // Check if user is a participant in this game
-    const isParticipant = gameRoom.players.some(player => 
+    const isParticipant = gameRoom.players.some((player: any) => 
       player.userId && player.userId._id.toString() === userId.toString()
     );
 
@@ -1011,7 +995,7 @@ export const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Resp
     // Calculate player stats
     const playerStats: PlayerStats[] = [];
     
-    for (const player of gameRoom.players) {
+    for (const player of gameRoom.players as any[]) {
       // Skip if userId is not populated or is a string
       if (!player.userId || typeof player.userId === 'string') {
         continue;
@@ -1022,12 +1006,12 @@ export const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Resp
       
       // Get all answers for this player
       const playerAnswers = gameRoom.answeredQuestions.filter(
-        aq => aq.playerId && aq.playerId.toString() === userId._id.toString()
+        (aq: IAnsweredQuestion) => aq.playerId && aq.playerId.toString() === userId._id.toString()
       );
 
-      const correctAnswers = playerAnswers.filter(a => a.isCorrect).length;
+      const correctAnswers = playerAnswers.filter((a: IAnsweredQuestion) => a.isCorrect).length;
       const totalQuestionsAnswered = playerAnswers.length;
-      const totalTimeTaken = playerAnswers.reduce((sum, a) => sum + (a.timeTaken || 0), 0);
+      const totalTimeTaken = playerAnswers.reduce((sum: number, a: IAnsweredQuestion) => sum + (a.timeTaken || 0), 0);
 
       // Calculate accuracy (percentage of correct answers, 0 if no answers)
       const accuracy = totalQuestionsAnswered > 0 
@@ -1087,10 +1071,8 @@ export const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Resp
     });
 
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error('Error finishing game:', error);
-    next(new AppError('Failed to process answer', 500));
+    console.error('Error fetching leaderboard:', error);
+    next(new AppError('Failed to fetch leaderboard', 500));
   }
 };
 
@@ -1164,10 +1146,6 @@ export const finishGame = async (req: IFinishGameRequest, res: Response, next: N
         message: `Game '${roomCode}' is not in a finishable state. Current status: ${gameRoom.status}`,
         statusCode: 400
       });
-      return next(new AppError(
-        `Game '${roomCode}' is not in a finishable state. Current status: ${gameRoom.status}`,
-        400
-      ));
     }
 
     // Calculate stats
@@ -1195,7 +1173,7 @@ export const finishGame = async (req: IFinishGameRequest, res: Response, next: N
     await gameRoom.save({ session });
 
     // Update player stats
-    const updatePromises = gameRoom.players.map(async (player: IPlayer) => {
+    const updatePromises = gameRoom.players.map(async (player: any) => {
       if (!player.userId) return null;
       
       const playerAnswers = answered.filter((a: any) => 
@@ -1203,7 +1181,6 @@ export const finishGame = async (req: IFinishGameRequest, res: Response, next: N
       );
       
       const playerCorrect = playerAnswers.filter((a: any) => a.isCorrect).length;
-      const playerAccuracy = totalQuestions > 0 ? Math.round((playerCorrect / totalQuestions) * 100) : 0;
 
       const update: any = {
         $inc: { 
@@ -1238,7 +1215,7 @@ export const finishGame = async (req: IFinishGameRequest, res: Response, next: N
     await session.commitTransaction();
     session.endSession();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: 'Game finished and stats updated successfully',
       data: {
@@ -1252,7 +1229,7 @@ export const finishGame = async (req: IFinishGameRequest, res: Response, next: N
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
-    next(error);
+    return next(error);
   }
 };
 

@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { config } from '../../config/env';
 import { IUser } from './user.model'; // Make sure this path is correct
 import { register, login, getMe, forgotPassword, resetPassword, changePassword as changePasswordService, updateProfile, deleteUser } from './auth.service';
-import { AppError } from '../../middlewares/error.middleware';
+import { AppError } from '../../utils/appError';
 import asyncHandler from '../../middleware/async';
 
 // Helper function to generate JWT token
@@ -79,7 +79,7 @@ export const registerUser = asyncHandler(async (req: AuthRequest, res: Response,
 // @desc    Authenticate a user
 // @route   POST /api/auth/login
 // @access  Public
-export const loginUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+export const loginUser = asyncHandler(async (req: Request, res: Response) => {
   const { email, password } = req.body;
 
   // Input validation
@@ -104,16 +104,11 @@ export const loginUser = asyncHandler(async (req: Request, res: Response, next: 
   try {
     const user = await login(email, password);
     
-    // Generate JWT token
-    const token = generateToken(user);
+    // Generate JWT token (user already contains token from service)
+    const token = user.token;
 
-    // Prepare user data for response
-    const userObj = user && typeof user === 'object' ? 
-      (user.toObject ? user.toObject() : { ...user }) : {};
-      
-    const userWithoutPassword = { ...userObj };
-    delete userWithoutPassword.password;
-    delete userWithoutPassword.__v;
+    // Prepare user data for response (AuthResponse already excludes password)
+    const userData = { ...user };
 
     // Set secure HTTP-only cookie
     res.cookie('token', token, {
@@ -126,7 +121,7 @@ export const loginUser = asyncHandler(async (req: Request, res: Response, next: 
     return res.status(200).json({
       success: true,
       token,
-      data: userWithoutPassword,
+      data: userData,
       message: 'Login successful'
     });
   } catch (error: any) {
@@ -198,7 +193,7 @@ export const getMeHandler = asyncHandler(async (req: AuthRequest, res: Response,
 // @desc    Logout user / clear cookie
 // @route   GET /api/auth/logout
 // @access  Private
-export const logoutUser = asyncHandler(async (req: Request, res: Response) => {
+export const logoutUser = asyncHandler(async (_req: Request, res: Response) => {
   res.cookie('token', 'none', {
     expires: new Date(Date.now() + 10 * 1000), // 10 seconds
     httpOnly: true,

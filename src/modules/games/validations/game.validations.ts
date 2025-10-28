@@ -121,6 +121,7 @@ const handleValidationErrors: RequestHandler = (req: Request, _res: Response, ne
       return next(new AppError(
         errorMessage,
         400,
+        'VALIDATION_ERROR',
         true,
         errorMessages.length > 1 ? errorMessages : undefined
       ));

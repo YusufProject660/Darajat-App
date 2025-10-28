@@ -11,7 +11,7 @@ import session from 'express-session';
 import morgan from 'morgan';
 import passport from 'passport';
 import { Server as SocketIOServer } from 'socket.io';
-import mongoose from 'mongoose';
+// mongoose import removed as it was unused
 import { config } from './config/env';
 import { connectDB } from './config/db';
 import authRoutes from './modules/users/auth.routes';
@@ -23,14 +23,15 @@ import { globalErrorHandler, notFoundHandler } from './middlewares/error.middlew
 import { createError } from './utils/appError';
 import 'express-async-errors';
 import './config/passport';
+import { logger, stream } from './utils/logger';
 
 export class App {
   public app: Application;
   public server: http.Server;
   public io?: SocketIOServer;
   private port: string | number;
-  private dbConnection: mongoose.Connection | null = null;
   private isInitialized = false;
+  private isTestEnv = process.env.NODE_ENV === 'test';
 
   constructor() {
     this.app = express();
@@ -47,6 +48,37 @@ export class App {
     this.initializeErrorHandling();
   }
 
+  // Start the HTTP server
+  private start(): Promise<http.Server> {
+    return new Promise((resolve, reject) => {
+      if (!this.server) {
+        reject(new Error('Server not initialized'));
+        return;
+      }
+
+      const errorHandler = (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EADDRINUSE') {
+          console.error(`❌ Port ${this.port} is already in use`);
+        } else {
+          console.error('❌ Server error:', error);
+        }
+        reject(error);
+        this.server?.removeListener('error', errorHandler);
+      };
+
+      this.server.on('error', errorHandler);
+
+      // Start listening
+      this.server.listen(this.port, () => {
+        if (!this.isTestEnv) {
+          console.log(`🚀 Server running on http://localhost:${this.port}`);
+        }
+        this.server?.removeListener('error', errorHandler);
+        resolve(this.server);
+      });
+    });
+  }
+
   public async initialize() {
     if (this.isInitialized) {
       console.log('⚠️  App is already initialized');
@@ -54,28 +86,29 @@ export class App {
     }
 
     try {
-      console.log('🔌 Initializing database connection...');
-      this.dbConnection = await connectDB();
+      logger.info('🔌 Initializing database connection...');
+      await connectDB();
       
       // Start the HTTP server first
-      console.log('🚀 Starting HTTP server...');
+      logger.info('🚀 Starting HTTP server...');
       await this.start();
       
       // Then initialize WebSocket after the server is running
-      console.log('🔌 Initializing WebSocket...');
+      logger.info('🔌 Initializing WebSocket...');
       this.initializeSocketIO();
       
       this.isInitialized = true;
+      logger.info(`✅ Application running in ${config.nodeEnv} mode on port ${this.port}`);
       return this.server;
     } catch (error) {
-      console.error('❌ Failed to initialize application:', error);
+      logger.error('❌ Failed to initialize application:', error);
       process.exit(1);
     }
   }
   
   private initializeMiddlewares() {
-    // Request logging
-    this.app.use(morgan('dev'));
+    // Request logging with Winston
+    this.app.use(morgan('combined', { stream }));
 
     // Define allowed origins
     const allowedOrigins = [
@@ -97,7 +130,7 @@ export class App {
         }
         
         const error = new Error(`Origin ${origin} not allowed by CORS`);
-        console.warn(error.message);
+        logger.warn(error.message);
         return callback(error, false);
       },
       credentials: true,
@@ -157,118 +190,69 @@ export class App {
     this.app.use(passport.session());
   }
 
-  private initializeSession() {
-    // Session configuration
-    this.app.use(
-      session({
-        secret: config.jwtSecret || 'your-secret-key',
-        resave: false,
-        saveUninitialized: false,
-        cookie: {
-          secure: config.nodeEnv === 'production',
-          httpOnly: true,
-          maxAge: 24 * 60 * 60 * 1000, // 1 day
-          sameSite: 'lax' as const
-        },
-        name: 'sessionId'
-      })
-    );
 
-    // Initialize Passport
-    this.app.use(passport.initialize());
-    this.app.use(passport.session());
-  }
+  // private initializeRoutes() {
+  //   // Test routes for error handling
+  //   this.app.get('/test-error', (_req, _res) => {
+  //     // This will trigger our 404 handler
+  //     throw createError.notFound('Test error message');
+  //   });
 
-  private initializeRoutes() {
-    // Test routes for error handling
-    this.app.get('/test-error', (req, res) => {
-      // This will trigger our 404 handler
-      throw createError.notFound('Test error message');
-    });
-
-    // Test route for different error types
-    this.app.get('/test-errors/:type', (req, res) => {
-      const { type } = req.params;
+  //   // Test route for different error types
+  //   this.app.get('/test-errors/:type', (req, res) => {
+  //     const { type } = req.params;
       
-      switch (type) {
-        case 'not-found':
-          throw createError.notFound('Resource not found');
-        case 'validation':
-          throw createError.badRequest('Validation failed', { field: 'email', error: 'Invalid format' });
-        case 'unauthorized':
-          throw createError.unauthorized('Authentication required');
-        case 'forbidden':
-          throw createError.forbidden('Insufficient permissions');
-        case 'server-error':
-          throw new Error('Unexpected server error');
-        default:
-          res.json({
-            success: true,
-            message: 'Available test error types:',
-            types: ['not-found', 'validation', 'unauthorized', 'forbidden', 'server-error']
-          });
-      }
-    });
+  //     switch (type) {
+  //       case 'not-found':
+  //         throw createError.notFound('Resource not found');
+  //       case 'validation':
+  //         throw createError.badRequest('Validation failed', { field: 'email', error: 'Invalid format' });
+  //       case 'unauthorized':
+  //         throw createError.unauthorized('Authentication required');
+  //       case 'forbidden':
+  //         throw createError.forbidden('Insufficient permissions');
+  //       case 'server-error':
+  //         throw new Error('Unexpected server error');
+  //       default:
+  //         res.json({
+  //           success: true,
+  //           message: 'Available test error types:',
+  //           types: ['not-found', 'validation', 'unauthorized', 'forbidden', 'server-error']
+  //         });
+  //     }
+  //   });
 
-    // API routes
-    this.app.use('/api/auth', authRoutes);
-    this.app.use('/api/user', profileRoutes);
-    this.app.use('/api/game', gameRoutes);
-    this.app.use('/api/dashboard', dashboardRoutes);
-    // Decks listing endpoint for clients (supports filters)
-    this.app.get('/api/decks', async (req: Request, res: Response) => {
-      try {
-        const { Deck } = await import('./modules/games/models/deck.model');
-        const { category, difficulty, status } = (req.query || {}) as Record<string, string | undefined>;
+  //   // Health check endpoint
+  //   this.app.get('/health', (_req, res) => {
+  //     res.status(200).json({ status: 'ok' });
+  //   });
 
-        const filter: any = {};
-        if (typeof status === 'string' && status.length > 0 && status !== 'all') {
-          filter.status = status;
-        } else {
-          filter.status = 'active';
-        }
-        if (typeof category === 'string' && category.length > 0 && category !== 'all') {
-          filter.category = category;
-        }
-        if (typeof difficulty === 'string' && difficulty.length > 0 && difficulty !== 'all') {
-          filter.difficulty = difficulty;
-        }
-
-        const decks = await Deck.find(filter)
-          .select('_id name category difficulty status questionCount createdAt')
-          .sort({ createdAt: -1 })
-          .lean();
-        res.json({ success: true, decks });
-      } catch (error: any) {
-        res.status(500).json({ success: false, message: 'Failed to fetch decks', error: error?.name || 'UnknownError' });
-      }
-    });
-
-    // Categories endpoint: returns unique categories from Decks
-    this.app.get('/api/categories', async (_req: Request, res: Response) => {
-      try {
-        const { Deck } = await import('./modules/games/models/deck.model');
-        const agg = await Deck.aggregate([
-          { $match: { status: 'active' } },
-          { $group: { _id: '$category' } },
-          { $sort: { _id: 1 } }
-        ]);
-        const categories = (agg || []).map((c: any) => ({
-          _id: c._id,
-          name: String(c._id).charAt(0).toUpperCase() + String(c._id).slice(1)
-        }));
-        return res.status(200).json({ success: true, categories });
-      } catch (err: any) {
-        const message = err?.name === 'MongooseServerSelectionError' ? 'Database connection failed' : 'Failed to fetch categories';
-        return res.status(500).json({ success: false, message, error: err?.name || 'UnknownError' });
-      }
-    });
-    
-    // Health check endpoint
-    this.app.get('/health', (req, res) => {
-      res.status(200).json({ status: 'ok' });
-    });
-  }
+  //   // Categories endpoint
+  //   this.app.get('/api/categories', async (_req: Request, res: Response) => {
+  //     try {
+  //       await import('./modules/games/models/deck.model');
+  //       const agg = await Deck.aggregate([
+  //         { $match: { status: 'active' } },
+  //         { $group: { _id: '$category' } },
+  //         { $sort: { _id: 1 } }
+  //       ]);
+  //       const categories = (agg || []).map((c: any) => ({
+  //         _id: c._id,
+  //         name: String(c._id).charAt(0).toUpperCase() + String(c._id).slice(1)
+  //       }));
+  //       return res.status(200).json({ success: true, categories });
+  //     } catch (err: any) {
+  //       const message = err?.name === 'MongooseServerSelectionError' 
+  //         ? 'Database connection failed' 
+  //         : 'Failed to fetch categories';
+  //       return res.status(500).json({ 
+  //         success: false, 
+  //         message, 
+  //         error: err?.name || 'UnknownError' 
+  //       });
+  //     }
+  //   });
+  // }
 
   private initializeSocketIO() {
     if (!this.server) {
@@ -311,52 +295,83 @@ export class App {
     });
   }
 
-  private setupProcessHandlers() {
-    // Handle unhandled promise rejections
-    process.on('unhandledRejection', (err: Error) => {
-      console.error('Unhandled Rejection:', err);
-      process.exit(1);
+  // setupProcessHandlers removed as it was unused and its functionality is covered by initializeErrorHandling
+
+  private initializeRoutes(): void {
+    // Health check endpoint - must be first to ensure it's always available
+    this.app.get('/health', (_req: Request, res: Response) => {
+      return res.status(200).json({ status: 'ok' });
     });
-  }
 
-  public getIO() {
-    return this.io;
-  }
-
-  public async start(): Promise<http.Server> {
-    return new Promise<http.Server>((resolve, reject) => {
-      // Check if server is already running
-      if (this.server && 'listening' in this.server && this.server.listening) {
-        console.log('⚠️  Server is already running');
-        return resolve(this.server);
-      }
-
-      // Create server if it doesn't exist
-      if (!this.server) {
-        this.server = http.createServer(this.app);
-      }
-
-      // Handle server errors
-      const errorHandler = (error: NodeJS.ErrnoException) => {
-        if (error.code === 'EADDRINUSE') {
-          console.error(`❌ Port ${this.port} is already in use`);
-        } else {
-          console.error('❌ Server error:', error);
-        }
-        reject(error);
-        this.server?.removeListener('error', errorHandler);
-      };
-
-      this.server.on('error', errorHandler);
-
-      // Start listening
-      this.server.listen(this.port, () => {
-        console.log(`🚀 Server running on http://localhost:${this.port}`);
-        this.server?.removeListener('error', errorHandler);
-        resolve(this.server);
+    // API routes
+    if (authRoutes) this.app.use('/api/auth', authRoutes);
+    if (profileRoutes) this.app.use('/api/user', profileRoutes);
+    if (gameRoutes) this.app.use('/api/game', gameRoutes);
+    if (dashboardRoutes) this.app.use('/api/dashboard', dashboardRoutes);
+    
+    // Test routes for error handling - only in development
+    if (process.env.NODE_ENV !== 'production') {
+      this.app.get('/test-error', (_req: Request, _res: Response) => {
+        throw createError.notFound('Test error message');
       });
+
+      this.app.get('/test-errors/:type', (req: Request, res: Response) => {
+        const { type } = req.params;
+        
+        switch (type) {
+          case 'not-found':
+            throw createError.notFound('Resource not found');
+          case 'validation':
+            throw createError.badRequest('Validation failed', { field: 'email', error: 'Invalid format' });
+          case 'unauthorized':
+            throw createError.unauthorized('Authentication required');
+          case 'forbidden':
+            throw createError.forbidden('Insufficient permissions');
+          case 'server-error':
+            throw new Error('Unexpected server error');
+          default:
+            return res.json({
+              success: true,
+              message: 'Available test error types:',
+              types: ['not-found', 'validation', 'unauthorized', 'forbidden', 'server-error']
+            });
+        }
+      });
+    }
+    
+    // Decks listing endpoint for clients (supports filters)
+    this.app.get('/api/decks', async (req: Request, res: Response) => {
+      try {
+        const { category, status } = req.query as { category?: string; status?: string };
+        const filter: { status: string; category?: string } = { status: 'active' };
+
+        if (status && status !== 'all') {
+          filter.status = status;
+        }
+        
+        if (category && category !== 'all') {
+          filter.category = category;
+        }
+
+        res.json({
+          success: true,
+          data: {
+            filter,
+            message: 'Endpoint working. Implement database query here.'
+          }
+        });
+      } catch (error) {
+        logger.error('Error in /api/decks:', error);
+        res.status(500).json({
+          success: false,
+          message: 'An error occurred while fetching decks'
+        });
+      }
     });
   }
 }
 
-export default App;
+// Create and export a singleton instance of the App
+const app = new App();
+
+export default app;

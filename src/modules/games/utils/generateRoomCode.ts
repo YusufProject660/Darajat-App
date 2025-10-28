@@ -1,4 +1,3 @@
-import mongoose from 'mongoose';
 import { GameRoom } from '../models/gameRoom.model';
 
 const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Excluded similar looking characters

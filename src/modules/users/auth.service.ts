@@ -205,11 +205,8 @@ export const forgotPassword = async (email: string): Promise<{ success: boolean;
 
     // 4. Create reset URL
     const resetUrl = `${config.frontendUrl}/reset-password?token=${token}`;
-    
-    // 5. Create email message
-    const message = `You requested a password reset. Please click the following link to reset your password: \n\n${resetUrl}\n\nThis link will expire in 15 minutes.\n\nIf you didn't request this, please ignore this email.`;
 
-    // 6. Send email using our email service
+    // 5. Send email using our email service
     try {
       await sendPasswordResetEmail(user.email, resetUrl);
       

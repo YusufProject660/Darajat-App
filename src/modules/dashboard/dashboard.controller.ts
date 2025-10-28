@@ -15,7 +15,7 @@ interface IDashboardData {
   };
 }
 
-export const getDashboardData = async (req: Request, res: Response): Promise<void> => {
+export const getDashboardData = async (_req: Request, res: Response): Promise<void> => {
   try {
     // Fetch dashboard data
     const dashboardData = await Dashboard.findOne({}).lean<IDashboardData>();

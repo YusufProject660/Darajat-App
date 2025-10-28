@@ -24,7 +24,7 @@ const handleJWTError = (): AppError =>
 const handleJWTExpiredError = (): AppError =>
   new AppError('Your token has expired! Please log in again.', 401, 'TOKEN_EXPIRED');
 
-const sendError = (err: AppError, req: Request, res: Response) => {
+const sendError = (err: AppError, _req: Request, res: Response) => {
   // Log error in development
   if (process.env.NODE_ENV === 'development') {
     console.error('Error:', {

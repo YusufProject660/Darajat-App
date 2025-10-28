@@ -8,7 +8,7 @@ export class SocketService {
   private io: SocketIOServer<ClientEvents, ServerEvents, InterServerEvents, SocketData>;
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
 
-  private constructor(server: HttpServer, io: SocketIOServer) {
+  private constructor(_server: HttpServer, io: SocketIOServer) {
     this.io = io;
     this.initializeSocket();
   }
@@ -297,7 +297,7 @@ export class SocketService {
     }
   }
 
-  private handlePlayerDisconnect(roomCode: string, playerId: string, socketId: string): void {
+  private handlePlayerDisconnect(_roomCode: string, playerId: string, _socketId: string): void {
     const result = gameService.removePlayer(playerId);
     if (!result) return;
 

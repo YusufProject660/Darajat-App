@@ -8,6 +8,15 @@ export interface IPlayer {
   isHost: boolean;
 }
 
+export interface IAnsweredQuestion {
+  playerId: mongoose.Types.ObjectId;
+  questionId: mongoose.Types.ObjectId;
+  selectedOption: number;
+  isCorrect: boolean;
+  timeTaken: number;
+  answeredAt: Date;
+}
+
 export interface IGameRoom extends Document {
   hostId: mongoose.Types.ObjectId;
   roomCode: string;
@@ -30,13 +39,22 @@ export interface IGameRoom extends Document {
     totalTime: number;
   }>;
   currentQuestion?: number;
-  answeredQuestions: Array<{
-    playerId: mongoose.Types.ObjectId;
-    questionId: mongoose.Types.ObjectId;
-    isCorrect: boolean;
-    timeTaken: number;
-    answeredAt: Date;
-  }>;
+  answeredQuestions: IAnsweredQuestion[];
+  finishedAt?: Date;
+  stats?: {
+    gamesPlayed: number;
+    accuracy: number;
+    bestScore: number;
+    totalTime: number;
+    totalQuestions: number;
+    correctAnswers: number;
+    averageTimePerQuestion: number;
+  };
+  // Legacy properties for backward compatibility
+  categories?: any;
+  host?: mongoose.Types.ObjectId;
+  maxPlayers?: number;
+  gameSettings?: any;
   createdAt: Date;
 }
 
@@ -83,10 +101,21 @@ const gameRoomSchema = new Schema<IGameRoom>({
   answeredQuestions: [{
     playerId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     questionId: { type: Schema.Types.ObjectId, ref: 'Question', required: true },
+    selectedOption: { type: Number, required: true },
     isCorrect: { type: Boolean, required: true },
     timeTaken: { type: Number, required: true },
     answeredAt: { type: Date, default: Date.now }
   }],
+  finishedAt: { type: Date },
+  stats: {
+    gamesPlayed: { type: Number, default: 0 },
+    accuracy: { type: Number, default: 0 },
+    bestScore: { type: Number, default: 0 },
+    totalTime: { type: Number, default: 0 },
+    totalQuestions: { type: Number, default: 0 },
+    correctAnswers: { type: Number, default: 0 },
+    averageTimePerQuestion: { type: Number, default: 0 }
+  },
   createdAt: { type: Date, default: Date.now }
 });
 

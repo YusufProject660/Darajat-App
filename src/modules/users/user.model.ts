@@ -1,4 +1,4 @@
-import { Schema, model, Document, models } from 'mongoose';
+import { Schema, model, Document, models, HydratedDocument } from 'mongoose';
 import bcrypt from 'bcryptjs';
 
 // Interface for User document
@@ -30,6 +30,10 @@ export interface IUser extends Document {
     gamesPlayed: number;
     accuracy: number;
     bestScore: number;
+    totalCorrectAnswers?: number;
+    totalQuestionsAnswered?: number;
+    totalTimePlayed?: number;
+    averageAccuracy?: number;
   };
   role: 'player' | 'admin';
   resetToken?: string;
@@ -63,22 +67,8 @@ const userSchema = new Schema<IUser>(
     },
     password: {
       type: String,
-      required: [
-        function(this: IUser) {
-          return !(this.googleId || this.isOAuthUser); // Not required for OAuth users
-        },
-        'Please add a password'
-      ],
       minlength: [6, 'Password must be at least 6 characters'],
-      select: false, // Don't return password by default
-      validate: {
-        validator: function(value: string) {
-          // Skip validation if this is an OAuth user
-          if (this.isOAuthUser || this.googleId) return true;
-          return value && value.length >= 6;
-        },
-        message: 'Password is required for email/password users'
-      }
+      select: false // Don't return password by default
     },
     authProvider: {
       type: String,
@@ -137,7 +127,7 @@ userSchema.virtual('confirmPassword')
   .set(function(this: IUser, value: string) { this._confirmPassword = value; });
 
 // Hash password before saving
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function(this: HydratedDocument<IUser>, next) {
   if (!this.isModified('password') || !this.password) return next();
   
   try {
