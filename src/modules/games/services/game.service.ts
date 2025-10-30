@@ -64,7 +64,7 @@ class GameService {
           {
             $project: {
               _id: 1,
-              questionText: 1,
+              text: 1,
               options: 1,
               correctAnswer: 1,
               category: 1,

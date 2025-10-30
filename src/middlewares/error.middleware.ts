@@ -1,29 +1,47 @@
 import { Request, Response, NextFunction } from 'express';
-import { AppError, IErrorResponse } from '../utils/appError';
+import { AppError } from '../utils/appError';
 
+/**
+ * Handle MongoDB CastError (invalid ID format, etc.)
+ */
 const handleCastErrorDB = (err: any): AppError => {
   const message = `Invalid ${err.path}: ${err.value}`;
   return new AppError(message, 400, 'INVALID_INPUT');
 };
 
+/**
+ * Handle MongoDB duplicate field errors
+ */
 const handleDuplicateFieldsDB = (err: any): AppError => {
   const value = err.errmsg?.match(/(["'].*["'])/)?.[0] || 'a document';
   const message = `Duplicate field value: ${value}. Please use another value!`;
   return new AppError(message, 400, 'DUPLICATE_FIELD');
 };
 
+/**
+ * Handle MongoDB validation errors
+ */
 const handleValidationErrorDB = (err: any): AppError => {
   const errors = Object.values(err.errors).map((el: any) => el.message);
   const message = `Invalid input data. ${errors.join('. ')}`;
   return new AppError(message, 400, 'VALIDATION_ERROR', true, errors);
 };
 
+/**
+ * Handle JWT authentication errors
+ */
 const handleJWTError = (): AppError =>
   new AppError('Invalid token. Please log in again!', 401, 'INVALID_TOKEN');
 
+/**
+ * Handle expired JWT tokens
+ */
 const handleJWTExpiredError = (): AppError =>
   new AppError('Your token has expired! Please log in again.', 401, 'TOKEN_EXPIRED');
 
+/**
+ * Send error response using the API formatter
+ */
 const sendError = (err: AppError, _req: Request, res: Response) => {
   // Log error in development
   if (process.env.NODE_ENV === 'development') {
@@ -35,18 +53,25 @@ const sendError = (err: AppError, _req: Request, res: Response) => {
     });
   }
 
-  // Send error response
-  res.status(err.statusCode).json({
-    success: false,
-    error: {
-      message: err.message,
-      ...(err.code && { code: err.code }),
-      ...(err.details && { details: err.details }),
-      ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-    }
-  } as IErrorResponse);
+  // Prepare error details
+  const errorDetails = process.env.NODE_ENV === 'development' 
+    ? { 
+        ...(err.stack && { stack: err.stack }),
+        ...(err.details && { details: err.details })
+      }
+    : (err.details ? { details: err.details } : undefined);
+
+  // Use response formatter for consistent error responses
+  res.apiError(
+    err.message,
+    err.code || 'INTERNAL_ERROR',
+    errorDetails
+  );
 };
 
+/**
+ * Global error handler middleware
+ */
 export const globalErrorHandler = (
   err: any,
   req: Request,
@@ -73,13 +98,11 @@ export const globalErrorHandler = (
 
 // 404 Not Found handler
 export const notFoundHandler = (req: Request, res: Response) => {
-  res.status(404).json({
-    success: false,
-    error: {
-      message: `Can't find ${req.originalUrl} on this server!`,
-      code: 'NOT_FOUND'
-    }
-  });
+  res.apiError(
+    `Can't find ${req.originalUrl} on this server!`,
+    'NOT_FOUND',
+    { path: req.originalUrl }
+  );
 };
 
 export default globalErrorHandler;

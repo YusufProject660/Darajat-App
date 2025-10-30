@@ -15,21 +15,14 @@ declare global {
   }
 }
 
-// Type guard to check if the user is authenticated
-declare module 'express-serve-static-core' {
-  interface Request {
-    user?: IUser;
-  }
-}
-
 // For backward compatibility
 export type AuthUser = IUser;
 
 /**
  * Middleware to authenticate user using JWT token
- */
-/**
- * Middleware to authenticate user using JWT token
+ * @param req Express request object
+ * @param res Express response object
+ * @param next Next function
  */
 export const protect = async (
   req: ExpressRequest,
@@ -46,18 +39,34 @@ export const protect = async (
   
   // Check if token exists
   if (!token) {
-    return res.status(401).json({ message: 'Not authorized, no token' });
+    return res.apiError('Not authorized, no token provided', 'UNAUTHORIZED');
   }
 
   try {
+    // Log the received token for debugging
+    console.log('Verifying token:', token);
+    
     // Verify token
-    const decoded = jwt.verify(token, config.jwtSecret) as { id: string };
+    const decoded = jwt.verify(token, config.jwtSecret) as { 
+      id: string; 
+      role?: string;
+      email?: string;
+      username?: string;
+    };
+    
+    console.log('Decoded token payload:', JSON.stringify(decoded, null, 2));
+    
+    if (!decoded.id) {
+      console.error('Token is missing user ID');
+      return res.apiError('Invalid token: Missing user ID', 'INVALID_TOKEN');
+    }
     
     // Get user from the token
     const user = await User.findById(new Types.ObjectId(decoded.id)).select('-password');
-
+    
     if (!user) {
-      return res.status(401).json({ message: 'User not found' });
+      console.error(`User not found with ID: ${decoded.id}`);
+      return res.apiError('User not found', 'USER_NOT_FOUND');
     }
 
     // Convert to plain object and explicitly type it as IUser
@@ -81,7 +90,12 @@ export const protect = async (
     return next();
   } catch (error) {
     console.error('Token verification error:', error);
-    return res.status(401).json({ message: 'Not authorized, token failed' });
+    if (error instanceof jwt.TokenExpiredError) {
+      return res.apiError('Token has expired', 'TOKEN_EXPIRED');
+    } else if (error instanceof jwt.JsonWebTokenError) {
+      return res.apiError('Invalid token', 'INVALID_TOKEN');
+    }
+    return res.apiError('Not authorized, token verification failed', 'AUTH_FAILED');
   }
 };
 

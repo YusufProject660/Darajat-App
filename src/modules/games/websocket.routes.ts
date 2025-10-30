@@ -120,20 +120,19 @@ export function createWebSocketRouter(io: SocketIOServer) {
   // Status endpoint
   router.get('/status', (_req, res) => {
     try {
-      res.json({
-        status: 'ok',
+      res.apiSuccess({
         connected: true,
-        message: 'Socket.IO service is running',
+        timestamp: new Date().toISOString(),
         clientsCount: io.engine?.clientsCount || 0,
         activeRooms: gameRooms.size
-      });
+      }, 'Socket.IO service is running');
     } catch (error) {
       console.error('Error checking socket service status:', error);
-      res.status(500).json({
-        status: 'error',
-        connected: false,
-        message: 'Error checking socket service status'
-      });
+      res.apiError(
+        'Error checking socket service status', 
+        'SOCKET_ERROR',
+        { connected: false }
+      );
     }
   });
 
@@ -160,10 +159,10 @@ export function createWebSocketRouter(io: SocketIOServer) {
         .sort({ createdAt: -1 })
         .lean();
 
-      res.json({ success: true, decks });
+      res.apiSuccess({ decks }, 'Decks fetched successfully');
     } catch (error) {
       console.error('Error fetching decks:', error);
-      res.status(500).json({ success: false, error: 'Failed to fetch decks' });
+      res.apiError('Failed to fetch decks', 'FETCH_ERROR');
     }
   });
 

@@ -20,6 +20,7 @@ import dashboardRoutes from './modules/dashboard/dashboard.routes';
 import { initializeSocket } from './modules/games/services/socket.service';
 import { globalErrorHandler, notFoundHandler } from './middlewares/error.middleware';
 import { createError } from './utils/appError';
+import { responseFormatter } from './middlewares/responseFormatter';
 import 'express-async-errors';
 import './config/passport';
 import { logger, stream } from './utils/logger';
@@ -111,7 +112,7 @@ export class App {
 
       // Add health check route
       this.app.get('/health', (_req: Request, res: Response) => {
-        res.status(200).json({ status: 'ok' });
+        res.apiSuccess({ status: 'ok' }, 'Server is healthy');
       });
 
       this.isInitialized = true;
@@ -187,12 +188,15 @@ export class App {
 
     this.app.use(passport.initialize());
     this.app.use(passport.session());
+    
+    // Add response formatter after all middleware but before routes
+    this.app.use(responseFormatter);
   }
 
   private initializeRoutes(): void {
     // Health check route
     this.app.get('/health', (_req: Request, res: Response) => {
-      res.status(200).json({ status: 'ok' });
+      res.apiSuccess({ status: 'ok' }, 'Server is healthy');
     });
 
     // API routes

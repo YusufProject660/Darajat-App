@@ -47,66 +47,58 @@ export const registerUser = asyncHandler(async (req: AuthRequest, res: Response,
 
   // Validate required fields
   if (!email || !password || !confirmPassword) {
-    return next(new AppError('Email, password, and confirmPassword are required.', 400));
+    return res.apiError('Email, password, and confirmPassword are required.', 'MISSING_FIELDS');
   }
 
   // Check if passwords match
   if (password !== confirmPassword) {
-    return next(new AppError('Password and confirm password do not match.', 400));
+    return res.apiError('Password and confirm password do not match.', 'PASSWORD_MISMATCH');
   }
 
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
-    return next(new AppError('Please provide a valid email address', 400));
+    return res.apiError('Please provide a valid email address', 'INVALID_EMAIL');
   }
 
   try {
     // Use email as username for now
     const user = await register(email, email, password, confirmPassword);
     
-    return res.status(201).json({
-      success: true,
-      message: 'Sign up successful',
-      token: user.token,
-      data: {
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        role: user.role
-      }
-    });
+    // Set the token in the response header
+    res.setHeader('Authorization', `Bearer ${user.token}`);
+    
+    return res.apiSuccess({
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      role: user.role,
+      token: user.token
+    }, 'Sign up successful');
   } catch (error: any) {
     if (error.message === 'User with this email or username already exists') {
-      return next(new AppError('Email already registered.', 400));
+      return res.apiError('Email already registered.', 'DUPLICATE_EMAIL');
     }
-    next(error);
+    // Pass other errors to the global error handler
+    return next(error);
   }
 });
 
 // @desc    Authenticate a user
 // @route   POST /api/auth/login
 // @access  Public
-export const loginUser = asyncHandler(async (req: Request, res: Response) => {
+export const loginUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { email, password } = req.body;
 
   // Input validation
   if (!email || !password) {
-    return res.status(400).json({
-      success: false,
-      message: 'Please provide both email and password',
-      error: 'MISSING_CREDENTIALS'
-    });
+    return res.apiError('Please provide both email and password', 'MISSING_CREDENTIALS');
   }
 
   // Email format validation
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Please provide a valid email address',
-      error: 'INVALID_EMAIL_FORMAT'
-    });
+    return res.apiError('Please provide a valid email address', 'INVALID_EMAIL_FORMAT');
   }
 
   try {
@@ -120,63 +112,32 @@ export const loginUser = asyncHandler(async (req: Request, res: Response) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     });
 
-    // Send the response with user data in the desired format
-    res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      token,
-      user: {
-        id: user._id,
-        email: user.email,
-        role: user.role
-      }
-    });
+    // Return user data and token using response formatter
+    return res.apiSuccess({
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      role: user.role,
+      token
+    }, 'Login successful');
   } catch (error: any) {
     // Handle specific error cases from auth service
     if (error.code === 'INVALID_CREDENTIALS') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid email or password',
-        error: 'INVALID_CREDENTIALS'
-      });
+      return res.apiError('Invalid email or password', 'INVALID_CREDENTIALS');
     }
-
+    
     if (error.code === 'OAUTH_ACCOUNT') {
-      return res.status(401).json({
-        success: false,
-        message: error.message || 'This account uses OAuth for authentication. Please sign in with your OAuth provider.',
-        error: 'OAUTH_AUTH_REQUIRED'
-      });
+      return res.apiError(
+        error.message || 'This account uses OAuth for authentication. Please sign in with your OAuth provider.',
+        'OAUTH_AUTH_REQUIRED'
+      );
     }
-
-    // Handle database errors
-    if (error.name === 'MongoError' || error.name === 'MongoServerError') {
-      return res.status(503).json({
-        success: false,
-        message: 'Service temporarily unavailable. Please try again later.',
-        error: 'SERVICE_UNAVAILABLE'
-      });
-    }
-
-    // Handle validation errors
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation error: ' + error.message,
-        error: 'VALIDATION_ERROR',
-        details: error.errors
-      });
-    }
-
-    // Default error response
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || 'An unexpected error occurred during login. Please try again later.',
-      error: error.code || 'INTERNAL_SERVER_ERROR'
-    });
+    
+    // Pass other errors to the global error handler
+    next(error);
   }
 });
 
@@ -355,16 +316,12 @@ export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Resp
   try {
     const updatedUser = await updateProfile(req.user!.id, { username, email, avatar });
     
-    res.status(200).json({
-      success: true,
-      message: 'Profile updated successfully',
-      data: {
-        userId: updatedUser.id,
-        username: updatedUser.username,
-        email: updatedUser.email,
-        avatar: updatedUser.avatar
-      }
-    });
+    return res.apiSuccess({
+      userId: updatedUser.id,
+      username: updatedUser.username,
+      email: updatedUser.email,
+      avatar: updatedUser.avatar
+    }, 'Profile updated successfully');
   } catch (error: any) {
     if (error.message === 'Email already in use' || error.message === 'Username already taken') {
       return next(new AppError(error.message, 400));
@@ -379,30 +336,40 @@ export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Resp
 // @desc    Delete user account permanently
 // @route   DELETE /api/user/delete
 // @access  Private
-export const deleteUserAccount = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const deleteUserAccount = asyncHandler(async (req: AuthRequest, res: Response, _next: NextFunction) => {
   const userId = req.user?.id;
 
   if (!userId) {
-    return next(new AppError('User not authenticated', 401));
+    return res.status(200).json({
+      status: 0,
+      message: 'User not authenticated'
+    });
   }
 
   try {
     const result = await deleteUser(userId);
     
     if (!result.success) {
-      return next(new AppError(result.message, 404));
+      // Return a simplified response with only status and message
+      return res.status(200).json({
+        status: 0,
+        message: result.message
+      });
     }
 
     // Clear the JWT cookie if using cookie-based auth
     res.clearCookie('jwt');
 
-    res.status(200).json({
-      success: true,
+    return res.status(200).json({
+      status: 1,
       message: 'Account deleted successfully'
     });
   } catch (error: any) {
     console.error('Error deleting account:', error);
-    return next(new AppError('Failed to delete account. Please try again later.', 500));
+    return res.status(200).json({
+      status: 0,
+      message: 'Failed to delete account. Please try again later.'
+    });
   }
 });
 

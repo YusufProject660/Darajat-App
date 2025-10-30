@@ -14,21 +14,31 @@ const signToken = (user: any) => {
 };
 
 export const register = async (req: Request, res: Response) => {
-  const { email, password, username } = req.body;
-  const exists = await User.findOne({ email });
-  if (exists) return res.status(400).json({ message: "Email already used" });
-  const user = await User.create({ email, password, username });
-  const token = signToken(user);
-  res.json({ token, user });
+  try {
+    const { email, password, username } = req.body;
+    const exists = await User.findOne({ email });
+    if (exists) return res.apiError("Email already used", "EMAIL_EXISTS");
+    
+    const user = await User.create({ email, password, username });
+    const token = signToken(user);
+    res.apiSuccess({ token, user }, "Registration successful");
+  } catch (error: any) {
+    res.apiError(error.message || "Registration failed", "REGISTRATION_ERROR");
+  }
 };
 
 export const login = async (req: Request, res: Response) => {
-  const { email, password } = req.body;
-  const user = await User.findOne({ email });
-  if (!user || !(await user.comparePassword(password)))
-    return res.status(401).json({ message: "Invalid credentials" });
-  const token = signToken(user);
-  res.json({ token, user });
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user || !(await user.comparePassword(password)))
+      return res.apiError("Invalid credentials", "INVALID_CREDENTIALS");
+      
+    const token = signToken(user);
+    res.apiSuccess({ token, user }, "Login successful");
+  } catch (error: any) {
+    res.apiError(error.message || "Login failed", "LOGIN_ERROR");
+  }
 };
 
 // export const googleLogin = async (req: Request, res: Response) => {
@@ -40,24 +50,17 @@ export const login = async (req: Request, res: Response) => {
 //   });
 //   const payload = ticket.getPayload();
 //   if (!payload || !payload.email)
-//     return res.status(400).json({ message: "Invalid Google token" });
+//     return res.apiError("Invalid Google token", "INVALID_GOOGLE_TOKEN");
 //   let user = await User.findOne({ email: payload.email });
 //   if (!user) {
 //     user = await User.create({
 //       email: payload.email,
-//       username: payload.name || payload.email.split("@")[0],
-//       avatar: payload.picture,
-//       googleId: payload.sub,
-//     });
-//   }
-//   const token = signToken(user);
-//   res.json({ token, user });
-// };
 
 export const forgotPassword = async (req: Request, res: Response) => {
   const { email } = req.body;
 
   const user = await User.findOne({ email });
+  if (!user) return res.apiError("User not found", "USER_NOT_FOUND");
   if (!user) return res.status(404).json({ message: "User not found" });
 
   const resetToken = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '1h' });
@@ -72,28 +75,28 @@ export const forgotPassword = async (req: Request, res: Response) => {
 
   try {
     await sendEmail(user.email, 'DaRajat App - Password Reset Request', html);
-    res.json({ message: "Password reset email sent" });
+    return res.apiSuccess({}, 'Password reset email sent');
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: "Failed to send email" });
+    return res.apiSuccess({}, 'Logged out successfully');
   }
 };
 
 export const resetPassword = async (req: Request, res: Response) => {
   const { token, newPassword } = req.body;
-  if (!token || !newPassword) return res.status(400).json({ message: "Token and new password required" });
+  if (!token || !newPassword) return res.apiSuccess({ token }, 'Google authentication successful');
 
   try {
     const payload: any = jwt.verify(token, JWT_SECRET);
     const user = await User.findById(payload.id);
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) return res.apiError('User not authenticated', 'UNAUTHENTICATED');
 
     user.password = newPassword; // pre-save hook hashes it
     await user.save();
 
-    res.json({ message: "Password has been reset successfully" });
+    return res.apiSuccess({}, 'Password has been reset successfully');
   } catch (err: any) {
-    if (err.name === 'TokenExpiredError') return res.status(401).json({ message: "Reset token expired" });
-    res.status(400).json({ message: "Invalid reset token" });
+    if (err.name === 'TokenExpiredError') return res.apiError('No token provided', 'MISSING_TOKEN');
+    return res.apiSuccess({ role: 'admin' }, 'Admin access granted');
   }
 };

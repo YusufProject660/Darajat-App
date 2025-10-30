@@ -22,14 +22,41 @@ interface AuthResponse {
 }
 
 const generateToken = (user: IUser): string => {
-  return jwt.sign(
-    { 
-      id: user._id,
-      role: user.role 
-    }, 
-    config.jwtSecret, 
-    { expiresIn: '100y' }
-  );
+  try {
+    // Make sure to convert ObjectId to string
+    const userId = user._id?.toString();
+    
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    const payload = {
+      id: userId,
+      role: user.role || 'player',
+      email: user.email,
+      username: user.username
+    };
+
+    // Log the payload for debugging
+    console.log('JWT Payload:', JSON.stringify(payload, null, 2));
+
+    const token = jwt.sign(
+      payload,
+      config.jwtSecret,
+      { 
+        expiresIn: '100y',
+        algorithm: 'HS256'
+      }
+    );
+
+    // Log the generated token for debugging
+    console.log('Generated Token:', token);
+    
+    return token;
+  } catch (error) {
+    console.error('Error generating token:', error);
+    throw new Error('Failed to generate authentication token');
+  }
 };
 
 const formatUserResponse = (user: IUser, token: string): AuthResponse => ({

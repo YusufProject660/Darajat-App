@@ -118,16 +118,13 @@ const handleValidationErrors: RequestHandler = (req: Request, res: Response, nex
       const categoryError = errorMessages.find(e => (e.message || '').includes('At least one category must be enabled'));
       const errorMessage = categoryError ? categoryError.message : (errorMessages[0]?.message || 'Invalid request');
       
-      return res.status(400).json({
-        status: 'error',
-        message: errorMessage
-      });
+      return res.apiError(errorMessage, 'VALIDATION_ERROR');
     }
     
     next();
   } catch (error) {
     console.error('Error in validation middleware:', error);
-    return res.status(500).json({ status: 'error', message: 'An error occurred during validation' });
+    return res.apiError('An error occurred during validation', 'VALIDATION_ERROR');
   }
 };
 

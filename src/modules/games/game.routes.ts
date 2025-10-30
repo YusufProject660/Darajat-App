@@ -3,8 +3,7 @@ import { protect } from '../../middlewares/auth.middleware';
 import { isHost, isGameInLobby } from '../../middlewares/game.middleware';
 import { validateCreateGame, validateJoinGame } from './validations/game.validations';
 import { IUser } from '../users/user.model';
-const gameController = require('./game.controller');
-const {
+import {
   createGame, 
   getGameRoom, 
   joinGame, 
@@ -14,8 +13,11 @@ const {
   submitAnswer,
   getGameSummary,
   getGameLeaderboard,
-  finishGame
-} = gameController;
+  finishGame,
+  startGame,
+  kickPlayer,
+  updateGameSettings
+} from './game.controller';
 
 const router = express.Router();
 
@@ -104,20 +106,20 @@ router.patch('/finish/:roomCode', protect, isHost, (req: IFinishGameRequest, res
  * @desc    Start the game (Host only)
  * @access  Private
  */
-router.post('/:roomCode/start', protect, isHost, isGameInLobby, gameController.startGame);
+router.post('/:roomCode/start', protect, isHost, isGameInLobby, startGame);
 
 /**
  * @route   POST /api/game/:roomCode/players/:playerId/kick
  * @desc    Kick a player from the game (Host only)
  * @access  Private
  */
-router.post('/:roomCode/players/:playerId/kick', protect, isHost, gameController.kickPlayer);
+router.post('/:roomCode/players/:playerId/kick', protect, isHost, kickPlayer);
 
 /**
  * @route   PATCH /api/game/:roomCode/settings
  * @desc    Update game settings (Host only)
  * @access  Private
  */
-router.patch('/:roomCode/settings', protect, isHost, isGameInLobby, gameController.updateGameSettings);
+router.patch('/:roomCode/settings', protect, isHost, isGameInLobby, updateGameSettings);
 
 export default router;

@@ -12,10 +12,7 @@ export const getUserProfile = asyncHandler(async (req: Request, res: Response) =
   const user = await User.findById(req.user?._id).select('-password -resetToken -resetTokenExpires -__v');
 
   if (!user) {
-    return res.status(404).json({
-      success: false,
-      message: 'User not found'
-    });
+    return res.apiError('User not found', 'USER_NOT_FOUND');
   }
 
   // Format the response
@@ -32,9 +29,5 @@ export const getUserProfile = asyncHandler(async (req: Request, res: Response) =
     }
   };
 
-  return res.status(200).json({
-    success: true,
-    message: 'User profile fetched successfully',
-    data: userProfile
-  });
+  return res.apiSuccess(userProfile, 'User profile fetched successfully');
 });

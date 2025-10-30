@@ -41,18 +41,12 @@ export const getDashboardData = async (_req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Prepare response
-    const response = {
-      success: true,
-      message: 'Dashboard data fetched successfully',
-      data: {
-        banner: dashboardData.banner,
-        funGames: dashboardData.funGames || [],
-        actions: dashboardData.actions
-      }
-    };
-
-    res.status(200).json(response);
+    // Prepare and send success response
+    return res.apiSuccess({
+      banner: dashboardData.banner,
+      funGames: dashboardData.funGames || [],
+      actions: dashboardData.actions
+    }, 'Dashboard data fetched successfully');
   } catch (error) {
     console.error('Error fetching dashboard data:', error);
     res.status(500).json({
