@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { AppError } from '../../utils/appError';
 import { GameRoom, IPlayer, IAnsweredQuestion } from './models/gameRoom.model';
 import { Deck } from './models/deck.model';
+import {gameService} from './services/game.service';
 import User from '../users/user.model';
 import { Question } from './models/question.model';
 import { generateUniqueRoomCode } from './utils/generateRoomCode';
@@ -56,6 +57,7 @@ interface IGameLobbyRequest extends Request {
 
     // Validate categories structure
     if (!categories || typeof categories !== 'object' || Object.keys(categories).length === 0) {
+      console.error('[createGame] 400: categories missing or empty');
       return res.status(400).json({
         status: 'error',
         message: 'At least one category must be enabled'
@@ -64,6 +66,7 @@ interface IGameLobbyRequest extends Request {
 
     // Validate number of questions
     if (typeof numberOfQuestions !== 'number' || numberOfQuestions < 1 || numberOfQuestions > 50) {
+      console.error('[createGame] 400: invalid numberOfQuestions');
       return res.status(400).json({
         status: 'error',
         message: 'Number of questions must be between 1 and 50'
@@ -72,6 +75,7 @@ interface IGameLobbyRequest extends Request {
 
     // Validate maximum players
     if (typeof maximumPlayers !== 'number' || maximumPlayers < 2 || maximumPlayers > 10) {
+      console.error('[createGame] 400: invalid maximumPlayers');
       return res.status(400).json({
         status: 'error',
         message: 'Maximum players must be between 2 and 10'
@@ -79,7 +83,7 @@ interface IGameLobbyRequest extends Request {
     }
 
     // Process categories into the required format and collect enabled categories
-    const processedCategories = {};
+    const processedCategories = new Map();
     const enabledCategories: Array<{category: string, difficulty: string}> = [];
 
     for (const [category, settings] of Object.entries(categories as Record<string, any>)) {
@@ -88,24 +92,25 @@ interface IGameLobbyRequest extends Request {
           ? settings.difficulty.toLowerCase()
           : 'easy';
           
-        processedCategories[category] = {
+        processedCategories.set(category, {
           enabled: true,
           difficulty: difficulty
-        };
+        });
         
         enabledCategories.push({
           category,
           difficulty
         });
       } else {
-        processedCategories[category] = {
+        processedCategories.set(category, {
           enabled: false,
           difficulty: 'easy'
-        };
+        });
       }
     }
 
     if (enabledCategories.length === 0) {
+      console.error('[createGame] 400: no enabled categories after processing');
       return res.status(400).json({
         status: 'error',
         message: 'At least one category must be enabled'
@@ -121,7 +126,7 @@ interface IGameLobbyRequest extends Request {
         ]
       });
 
-      if (!decks.length) return [];
+      if (!Array.isArray(decks) || decks.length === 0) return [];
 
       const deckIds = decks.map(deck => deck._id);
       
@@ -132,13 +137,13 @@ interface IGameLobbyRequest extends Request {
       }).limit(numberOfQuestions);
 
       // If not enough questions, get any difficulty
-      if (questions.length < numberOfQuestions) {
+      if ((questions?.length || 0) < numberOfQuestions) {
         const additionalQuestions = await Question.find({
           deckId: { $in: deckIds },
-          _id: { $nin: questions.map(q => q._id) }
-        }).limit(numberOfQuestions - questions.length);
+          _id: { $nin: (questions || []).map(q => q._id) }
+        }).limit(numberOfQuestions - (questions?.length || 0));
         
-        questions = [...questions, ...additionalQuestions];
+        questions = [...(questions || []), ...additionalQuestions];
       }
 
       return questions;
@@ -148,6 +153,7 @@ interface IGameLobbyRequest extends Request {
     const allQuestions = questionsResults.flat();
 
     if (allQuestions.length === 0) {
+      console.error('[createGame] 400: no questions found');
       return res.status(400).json({
         status: 'error',
         message: 'No questions found for the selected categories'
@@ -160,14 +166,18 @@ interface IGameLobbyRequest extends Request {
       .slice(0, numberOfQuestions);
 
     if (shuffledQuestions.length === 0) {
-      return next(new AppError('No questions found for the selected categories and difficulty levels', 400));
+      console.error('[createGame] 400: shuffledQuestions empty');
+      return res.status(400).json({
+        status: 'error',
+        message: 'No questions found for the selected categories and difficulty levels'
+      });
     }
 
     // Create game room
     const roomCode = await generateUniqueRoomCode();
     
     try {
-      const gameRoom = await GameRoom.create({
+      const newRoom = new GameRoom({
         hostId: req.user._id,
         roomCode,
         settings: {
@@ -188,31 +198,33 @@ interface IGameLobbyRequest extends Request {
         results: []
       });
 
-      // Populate questions for response
-      const populatedRoom = await GameRoom.findById(gameRoom._id)
+      const saved = await newRoom.save();
+      
+      // Populate the game with questions and player details
+      const populatedGame = await GameRoom.findById(saved._id)
         .populate({
-          path: 'questions',
-          select: '-correctAnswer -explanation -source -__v -createdAt -updatedAt'
-        });
+          path: 'players.userId',
+          select: 'username avatar'
+        })
+        .populate('questions')
+        .lean();
+
+      // Convert the Map to a plain object for the response
+      if (populatedGame) {
+        populatedGame.settings.categories = Object.fromEntries(processedCategories);
+      }
 
       res.status(201).json({
         status: 'success',
-        data: {
-          roomCode: populatedRoom?.roomCode,
-          settings: populatedRoom?.settings,
-          players: populatedRoom?.players,
-          questions: populatedRoom?.questions
-        }
+        data: populatedGame
       });
     } catch (error) {
       console.error('Error in createGame:', error);
-      next(new AppError('Failed to create game room', 500));
-      return; // Explicit return after next() to satisfy TypeScript
+      return res.status(500).json({ status: 'error', message: 'Failed to create game room' });
     }
   } catch (error) {
     console.error('Unexpected error in createGame:', error);
-    next(new AppError('An unexpected error occurred', 500));
-    return;
+    return res.status(500).json({ status: 'error', message: 'An unexpected error occurred' });
   }
 };
 
@@ -222,12 +234,9 @@ interface IGameLobbyRequest extends Request {
  * @access  Private
  */
  const joinGame = async (req: IRequestWithUser, res: Response, next: NextFunction) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  
   try {
     if (!req.user) {
-      return next(new AppError('User not authenticated', 401));
+      return res.status(401).json({ status: 'error', message: 'User not authenticated' });
     }
 
     const { roomCode } = req.body;
@@ -236,19 +245,15 @@ interface IGameLobbyRequest extends Request {
     const avatar = req.user.avatar;
 
     // Find the game room
-    const gameRoom = await GameRoom.findOne({ roomCode }).session(session);
+    const gameRoom = await GameRoom.findOne({ roomCode });
     
     if (!gameRoom) {
-      await session.abortTransaction();
-      session.endSession();
-      return next(new AppError('Invalid room code or game not available', 404));
+      return res.status(404).json({ status: 'error', message: 'Game room not found' });
     }
 
     // Check if game is joinable
     if (gameRoom.status !== 'waiting') {
-      await session.abortTransaction();
-      session.endSession();
-      return next(new AppError('Game is not accepting new players', 400));
+      return res.status(400).json({ status: 'error', message: 'Game has already started' });
     }
 
     // Check if already joined
@@ -257,16 +262,14 @@ interface IGameLobbyRequest extends Request {
     );
 
     if (alreadyJoined) {
-      await session.abortTransaction();
-      session.endSession();
-      return next(new AppError('You have already joined this game', 400));
+      return res.status(400).json({ status: 'error', message: 'You have already joined this game' });
     }
 
     // Check if room is full
-    if (gameRoom.players.length >= gameRoom.settings.maximumPlayers) {
-      await session.abortTransaction();
-      session.endSession();
-      return next(new AppError('Game room is full', 400));
+    const currentPlayersCount = Array.isArray(gameRoom.players) ? gameRoom.players.length : 0;
+    const maxPlayersAllowed = gameRoom.settings?.maximumPlayers || 0;
+    if (currentPlayersCount >= maxPlayersAllowed) {
+      return res.status(400).json({ status: 'error', message: 'Game is full' });
     }
 
     // Add player to the game
@@ -278,14 +281,12 @@ interface IGameLobbyRequest extends Request {
       isHost: false
     });
 
-    await gameRoom.save({ session });
-    await session.commitTransaction();
+    await gameRoom.save();
 
     // Format the response
-    const response = {
-      success: true,
-      message: 'Joined the game successfully',
-      game: {
+    res.status(200).json({
+      status: 'success',
+      data: {
         roomCode: gameRoom.roomCode,
         categories: gameRoom.settings.categories,
         numberOfQuestions: gameRoom.settings.numberOfQuestions,
@@ -295,14 +296,9 @@ interface IGameLobbyRequest extends Request {
         })),
         status: gameRoom.status
       }
-    };
-
-    res.status(201).json(response);
+    });
   } catch (error) {
-    await session.abortTransaction();
-    next(error);
-  } finally {
-    session.endSession();
+    return res.status(500).json({ status: 'error', message: 'Failed to join game' });
   }
 };
 
@@ -331,23 +327,20 @@ interface IGameLobbyRequest extends Request {
     const difficulty = settings.difficulty;
 
     // Prepare the response
-    const response = {
-      success: true,
-      data: {
-        ...gameRoom,
-        category,
-        difficulty,
-        players: gameRoom.players.map((player: any) => ({
-          userId: player.userId?._id,
-          username: player.username || player.userId?.username,
-          avatar: player.avatar || player.userId?.avatar
-        }))
-      }
+    const responseData = {
+      ...gameRoom,
+      category,
+      difficulty,
+      players: gameRoom.players.map((player: any) => ({
+        userId: player.userId?._id,
+        username: player.username || player.userId?.username,
+        avatar: player.avatar || player.userId?.avatar
+      }))
     };
 
-    res.status(200).json(response);
+    res.status(200).json({ status: 'success', data: responseData });
   } catch (error) {
-    next(error);
+    return res.status(500).json({ status: 'error', message: 'Failed to get game room' });
   }
 };
 
@@ -867,19 +860,16 @@ interface IFinishGameRequest extends Request {
  */
 const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunction) => {
   const { roomCode } = req.params;
-  const session = await mongoose.startSession();
   
   try {
-    await session.startTransaction();
     
     // Input validation
     if (!roomCode || typeof roomCode !== 'string' || roomCode.trim() === '') {
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
-        success: false,
-        message: 'Room code is required',
-        statusCode: 400
+        status: 'error',
+        message: 'Room code is required'
       });
     }
 
@@ -887,52 +877,40 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
     const gameRoom = await GameRoom.findOne({ 
       roomCode: { $regex: new RegExp(`^${roomCode}$`, 'i') }
     })
-      .populate<{ players: IPlayer[] }>('players.userId', 'stats')
-      .session(session);
+      .populate<{ players: IPlayer[] }>('players.userId', 'stats');
 
     if (!gameRoom) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(404).json({
-        success: false,
-        message: `Game room with code '${roomCode}' not found`,
-        statusCode: 404
+        status: 'error',
+        message: 'Game not found'
       });
     }
 
     // Check game status
-    if (gameRoom.status === 'finished') {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(409).json({
-        success: false,
-        message: `Game '${roomCode}' has already been completed`,
-        status: gameRoom.status,
-        finishedAt: gameRoom.finishedAt,
-        statusCode: 409
+    if (gameRoom.status === 'finished' || gameRoom.status === 'completed') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Game is already finished'
       });
     }
 
     // Additional validation - check if game has started
     if (gameRoom.status !== 'active') {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(400).json({
-        success: false,
-        message: `Game '${roomCode}' is not in a finishable state. Current status: ${gameRoom.status}`,
-        statusCode: 400
+        status: 'error',
+        message: 'Game is not in a finishable state'
       });
     }
 
     // Calculate stats
-    const totalQuestions = gameRoom.questions.length;
-    const answered = gameRoom.answeredQuestions || [];
+    const totalQuestions = Array.isArray(gameRoom.questions) ? gameRoom.questions.length : 0;
+    const answered = Array.isArray(gameRoom.answeredQuestions) ? gameRoom.answeredQuestions : [];
     const correct = answered.filter((q: any) => q.isCorrect).length;
     const totalTime = answered.reduce((sum: number, q: any) => sum + (q.timeTaken || 0), 0);
     const accuracy = totalQuestions > 0 ? Math.round((correct / totalQuestions) * 100) : 0;
 
     // Update game room status
-    gameRoom.status = 'finished';
+    gameRoom.status = 'completed';
     gameRoom.finishedAt = new Date();
     
     // Update game stats
@@ -946,7 +924,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       averageTimePerQuestion: answered.length > 0 ? totalTime / answered.length : 0
     };
 
-    await gameRoom.save({ session });
+    await gameRoom.save();
 
     // Update player stats
     const updatePromises = gameRoom.players.map(async (player: IPlayer) => {
@@ -969,7 +947,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       };
 
       // Calculate new average accuracy
-      const user = await User.findById(player.userId).session(session);
+      const user = await User.findById(player.userId);
       if (user) {
         const currentTotalCorrect = user.stats?.totalCorrectAnswers || 0;
         const currentTotalQuestions = user.stats?.totalQuestionsAnswered || 0;
@@ -984,16 +962,13 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
         };
       }
 
-      return User.findByIdAndUpdate(player.userId, update, { new: true, session });
+      return User.findByIdAndUpdate(player.userId, update, { new: true });
     });
 
     await Promise.all(updatePromises);
-    await session.commitTransaction();
-    session.endSession();
 
     return res.status(200).json({
-      success: true,
-      message: 'Game finished and stats updated successfully',
+      status: 'success',
       data: {
         roomCode: gameRoom.roomCode,
         status: gameRoom.status,
@@ -1003,9 +978,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       }
     });
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    next(error);
+    return res.status(500).json({ status: 'error', message: 'Failed to finish game' });
   }
 }
 
@@ -1109,18 +1082,14 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       });
     }
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
       // Find the game room and question
       const [gameRoom, question] = await Promise.all([
-        GameRoom.findOne({ roomCode }).session(session),
-        Question.findById(questionId).session(session)
+        GameRoom.findOne({ roomCode }),
+        Question.findById(questionId)
       ]);
 
       if (!gameRoom) {
-        await session.abortTransaction();
         return res.status(404).json({
           status: 'error',
           message: 'Game room not found'
@@ -1128,7 +1097,6 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       }
 
       if (!question) {
-        await session.abortTransaction();
         return res.status(404).json({
           status: 'error',
           message: 'Question not found'
@@ -1137,7 +1105,6 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
 
       // Check if game is active
       if (gameRoom.status !== 'active') {
-        await session.abortTransaction();
         return res.status(400).json({
           status: 'error',
           message: 'Game is not active'
@@ -1150,7 +1117,6 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       );
 
       if (!player) {
-        await session.abortTransaction();
         return res.status(403).json({
           status: 'error',
           message: 'You are not a player in this game'
@@ -1165,7 +1131,6 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       );
 
       if (alreadyAnswered) {
-        await session.abortTransaction();
         return res.status(400).json({
           status: 'error',
           message: 'You have already answered this question'
@@ -1189,8 +1154,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
         answeredAt: new Date()
       });
 
-      await gameRoom.save({ session });
-      await session.commitTransaction();
+      await gameRoom.save();
 
       return res.status(200).json({
         status: 'success',
@@ -1202,10 +1166,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
         }
       });
     } catch (error) {
-      await session.abortTransaction();
       throw error;
-    } finally {
-      session.endSession();
     }
   } catch (error: any) {
     return res.status(500).json({
@@ -1221,20 +1182,54 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
 // @access  Private (Host only)
 const startGame = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Get game from request (already validated by isHost middleware)
     const game = (req as any).game;
+    const userId = (req as any).user._id;
+
+    console.log(`Starting game for room: ${game.roomCode}, user: ${userId}`);
     
-    // Update game status to active
-    game.status = 'active';
-    game.startedAt = new Date();
+    // Start the game and get updated room with populated data
+    const updatedGame = await gameService.startGame(game.roomCode, userId);
     
-    await game.save();
+    if (!updatedGame) {
+      throw new Error('Failed to start game: No game data returned');
+    }
+
+    // Log the successful start
+    console.log('Game started successfully:', {
+      gameId: updatedGame._id,
+      status: updatedGame.status,
+      playerCount: updatedGame.players?.length || 0,
+      questionCount: updatedGame.questions?.length || 0
+    });
+
+    // Extract the first question if available
+    const firstQuestion = updatedGame.questions?.[0] 
+      ? {
+          _id: updatedGame.questions[0]._id?.toString(),
+          questionText: updatedGame.questions[0].questionText,
+          options: updatedGame.questions[0].options,
+          category: updatedGame.questions[0].category,
+          difficulty: updatedGame.questions[0].difficulty,
+          timeLimit: updatedGame.questions[0].timeLimit
+        }
+      : null;
     
-    // TODO: Emit game started event via WebSocket
-    
+    // Return the response with proper counts
     res.status(200).json({
       status: 'success',
-      data: { game }
+      data: { 
+        game: {
+          id: updatedGame._id,
+          roomCode: updatedGame.roomCode,
+          status: updatedGame.status,
+          playerCount: updatedGame.players?.length || 0,
+          questionCount: updatedGame.questions?.length || 0,
+          currentQuestionIndex: updatedGame.currentQuestionIndex || 0,
+          settings: updatedGame.settings || {}
+        },
+        firstQuestion,
+        totalQuestions: updatedGame.questions?.length || 0
+      }
     });
   } catch (error) {
     next(error);
@@ -1273,26 +1268,129 @@ const kickPlayer = async (req: Request, res: Response, next: NextFunction) => {
   }
 };
 
+// Joi-based validation is defined lazily inside updateGameSettings to avoid
+// loading Joi at module import time, which can cause issues in some test envs.
+
 // @desc    Update game settings
 // @route   PATCH /api/game/:roomCode/settings
 // @access  Private (Host only)
 const updateGameSettings = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const { roomCode } = req.params;
     const { categories, numberOfQuestions, maximumPlayers } = req.body;
     const game = (req as any).game;
+    const io = req.app.get('io');
+
+    // Validate request body
+    const { default: Joi } = await import('joi');
+    const gameSettingsSchema = {
+      numberOfQuestions: Joi.number().integer().min(1).max(50).messages({
+        'number.base': 'Number of questions must be a number',
+        'number.integer': 'Number of questions must be an integer',
+        'number.min': 'Number of questions must be at least 1',
+        'number.max': 'Number of questions cannot exceed 50'
+      }),
+      maximumPlayers: Joi.number().integer().min(2).max(10).messages({
+        'number.base': 'Maximum players must be a number',
+        'number.integer': 'Maximum players must be an integer',
+        'number.min': 'Maximum players must be at least 2',
+        'number.max': 'Maximum players cannot exceed 10'
+      }),
+      categories: Joi.object().pattern(
+        Joi.string(),
+        Joi.object({
+          enabled: Joi.boolean().required(),
+          difficulty: Joi.string().valid('easy', 'medium', 'hard').required()
+        })
+      ).min(1).messages({
+        'object.min': 'At least one category must be enabled',
+        'object.base': 'Categories must be an object',
+        'any.required': 'Categories are required'
+      })
+    };
+
+    const schema = Joi.object({
+      ...(numberOfQuestions !== undefined && { numberOfQuestions: gameSettingsSchema.numberOfQuestions }),
+      ...(maximumPlayers !== undefined && { maximumPlayers: gameSettingsSchema.maximumPlayers }),
+      ...(categories && { categories: gameSettingsSchema.categories })
+    }).min(1).messages({
+      'object.min': 'At least one setting must be provided',
+      'any.required': 'At least one setting must be provided'
+    });
+
+    const { error } = schema.validate({ categories, numberOfQuestions, maximumPlayers }, { abortEarly: false });
     
-    // Update settings if provided
-    if (categories) game.categories = categories;
-    if (numberOfQuestions) game.numberOfQuestions = numberOfQuestions;
-    if (maximumPlayers) game.maximumPlayers = maximumPlayers;
+    if (error) {
+      const errorMessages = error.details.map(detail => detail.message);
+      return next(new AppError(`Invalid input: ${errorMessages.join('; ')}`, 400));
+    }
+
+    // Check if game is in lobby state
+    if (game.status !== 'waiting') {
+      return next(new AppError('Game settings can only be changed in the lobby', 400));
+    }
+
+    // Check if maximumPlayers is not less than current players count
+    if (maximumPlayers && maximumPlayers < game.players.length) {
+      return next(
+        new AppError(
+          `Cannot set maximum players to ${maximumPlayers} because there are already ${game.players.length} players in the game`,
+          400
+        )
+      );
+    }
+
+    // Update settings
+    const updateData: any = {};
     
-    await game.save();
+    if (categories) {
+      // Convert categories object to Map format if it's not already
+      const categoriesMap = new Map();
+      for (const [category, settings] of Object.entries(categories)) {
+        categoriesMap.set(category, settings);
+      }
+      updateData['settings.categories'] = categoriesMap;
+    }
     
-    // TODO: Notify all players about settings change via WebSocket
+    if (numberOfQuestions !== undefined) {
+      updateData['settings.numberOfQuestions'] = numberOfQuestions;
+    }
+    
+    if (maximumPlayers !== undefined) {
+      updateData['settings.maximumPlayers'] = maximumPlayers;
+    }
+
+    // Update game with new settings
+    const updatedGame = await GameRoom.findOneAndUpdate(
+      { roomCode },
+      { $set: updateData },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedGame) {
+      return next(new AppError('Game not found', 404));
+    }
+    
+    // Notify all players in the room about the settings update
+    if (io) {
+      io.to(roomCode).emit('settingsUpdated', {
+        settings: {
+          categories: updatedGame.settings.categories,
+          numberOfQuestions: updatedGame.settings.numberOfQuestions,
+          maximumPlayers: updatedGame.settings.maximumPlayers
+        }
+      });
+    }
     
     res.status(200).json({
       status: 'success',
-      data: { game }
+      data: {
+        settings: {
+          categories: updatedGame.settings.categories,
+          numberOfQuestions: updatedGame.settings.numberOfQuestions,
+          maximumPlayers: updatedGame.settings.maximumPlayers
+        }
+      }
     });
   } catch (error) {
     next(error);

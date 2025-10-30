@@ -90,14 +90,14 @@ const createGameValidations: ValidationChain[] = [
 ];
 
 // Enhanced error handling middleware
-const handleValidationErrors: RequestHandler = (req: Request, _res: Response, next: NextFunction) => {
+const handleValidationErrors: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
   try {
     const errors = validationResult(req);
     
     if (!errors.isEmpty()) {
       console.error('Validation errors:', errors.array());
-      
-      const errorMessages = errors.array().map((error: any) => {
+      const allErrors = errors.array();
+      const errorMessages = allErrors.map((error: any) => {
         // Handle different types of validation errors
         if (error.msg === 'Invalid value') {
           return {
@@ -114,23 +114,20 @@ const handleValidationErrors: RequestHandler = (req: Request, _res: Response, ne
         };
       });
       
-      const errorMessage = errorMessages.length === 1 
-        ? errorMessages[0].message 
-        : 'Multiple validation errors occurred';
+      // Prefer specific category error if present
+      const categoryError = errorMessages.find(e => (e.message || '').includes('At least one category must be enabled'));
+      const errorMessage = categoryError ? categoryError.message : (errorMessages[0]?.message || 'Invalid request');
       
-      return next(new AppError(
-        errorMessage,
-        400,
-        'VALIDATION_ERROR',
-        true,
-        errorMessages.length > 1 ? errorMessages : undefined
-      ));
+      return res.status(400).json({
+        status: 'error',
+        message: errorMessage
+      });
     }
     
     next();
   } catch (error) {
     console.error('Error in validation middleware:', error);
-    next(new AppError('An error occurred during validation', 500));
+    return res.status(500).json({ status: 'error', message: 'An error occurred during validation' });
   }
 };
 

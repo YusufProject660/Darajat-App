@@ -191,18 +191,66 @@ export class SocketService {
       });
 
       // Handle player ready status
-      socket.on('player_ready', ({ isReady }) => {
+      socket.on('player_ready', async ({ isReady }, callback) => {
         const { roomCode, playerId } = socket.data;
-        if (!roomCode || !playerId) return;
+        console.log(`Player ${playerId} ready status changed to:`, isReady);
+        
+        if (!roomCode || !playerId) {
+          console.error('Missing roomCode or playerId in player_ready event');
+          return callback?.({
+            success: false,
+            error: 'Missing room code or player ID'
+          });
+        }
 
-        const room = gameService.getRoom(roomCode);
-        if (!room) return;
+        try {
+          const room = gameService.getRoom(roomCode);
+          if (!room) {
+            console.error(`Room ${roomCode} not found`);
+            return callback?.({
+              success: false,
+              error: 'Room not found'
+            });
+          }
 
-        const player = room.players.find(p => p.id === playerId);
-        if (player) {
-          player.isReady = isReady;
-          // Notify all players about the updated player list
-          this.io.to(roomCode).emit('player_joined', { players: room.players });
+          const player = room.players.find(p => p.id === playerId);
+          if (!player) {
+            console.error(`Player ${playerId} not found in room ${roomCode}`);
+            return callback?.({
+              success: false,
+              error: 'Player not found in room'
+            });
+          }
+
+          // Update player's ready status
+          player.isReady = Boolean(isReady);
+          room.updatedAt = Date.now();
+          
+          // Get all players with their ready status
+          const players = room.players.map(p => ({
+            id: p.id,
+            name: p.name,
+            score: p.score,
+            isHost: p.isHost,
+            isReady: p.isReady || false
+          }));
+
+          // Broadcast updated player list to all clients in the room
+          this.io.to(roomCode).emit('players_updated', { players });
+          
+          console.log(`Player ${playerId} ready status updated to ${isReady} in room ${roomCode}`);
+          
+          callback?.({
+            success: true,
+            isReady: player.isReady,
+            message: `You are now ${player.isReady ? 'ready' : 'not ready'}`
+          });
+        } catch (error) {
+          console.error('Error handling player_ready event:', error);
+          callback?.({
+            success: false,
+            error: 'Failed to update ready status'
+          });
         }
       });
 

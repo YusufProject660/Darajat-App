@@ -14,7 +14,7 @@ const generateToken = (user: IUser): string => {
       role: user.role 
     },
     config.jwtSecret, 
-    { expiresIn: '7d' }
+    { expiresIn: '100y' }
   );
 };
 
@@ -44,17 +44,14 @@ type AuthRequest = Request;
 // @access  Public
 export const registerUser = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
   const { email, password, confirmPassword } = req.body;
-  console.log('Register request received:', { email });
 
   // Validate required fields
   if (!email || !password || !confirmPassword) {
-    console.log('Missing required fields');
     return next(new AppError('Email, password, and confirmPassword are required.', 400));
   }
 
   // Check if passwords match
   if (password !== confirmPassword) {
-    console.log('Passwords do not match');
     return next(new AppError('Password and confirm password do not match.', 400));
   }
 
@@ -65,11 +62,9 @@ export const registerUser = asyncHandler(async (req: AuthRequest, res: Response,
   }
 
   try {
-    console.log('Attempting to register user:', email);
     // Use email as username for now
     const user = await register(email, email, password, confirmPassword);
     
-    console.log('User registered successfully:', email);
     return res.status(201).json({
       success: true,
       message: 'Sign up successful',
@@ -82,7 +77,6 @@ export const registerUser = asyncHandler(async (req: AuthRequest, res: Response,
       }
     });
   } catch (error: any) {
-    console.error('Registration error:', error);
     if (error.message === 'User with this email or username already exists') {
       return next(new AppError('Email already registered.', 400));
     }
@@ -118,13 +112,10 @@ export const loginUser = asyncHandler(async (req: Request, res: Response) => {
   try {
     const user = await login(email, password);
     
-    // Generate JWT token (user already contains token from service)
-    const token = user.token;
-
-    // Prepare user data for response (AuthResponse already excludes password)
-    const userData = { ...user };
-
-    // Set secure HTTP-only cookie
+    // If we get here, the login was successful
+    const token = generateToken(user);
+  
+    // Set the token in an HTTP-only cookie
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -132,15 +123,18 @@ export const loginUser = asyncHandler(async (req: Request, res: Response) => {
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
 
-    return res.status(200).json({
+    // Send the response with user data in the desired format
+    res.status(200).json({
       success: true,
+      message: 'Login successful',
       token,
-      data: userData,
-      message: 'Login successful'
+      user: {
+        id: user._id,
+        email: user.email,
+        role: user.role
+      }
     });
   } catch (error: any) {
-    console.error('Login error:', error);
-    
     // Handle specific error cases from auth service
     if (error.code === 'INVALID_CREDENTIALS') {
       return res.status(401).json({
@@ -160,7 +154,6 @@ export const loginUser = asyncHandler(async (req: Request, res: Response) => {
 
     // Handle database errors
     if (error.name === 'MongoError' || error.name === 'MongoServerError') {
-      console.error('Database error during login:', error);
       return res.status(503).json({
         success: false,
         message: 'Service temporarily unavailable. Please try again later.',
@@ -179,7 +172,6 @@ export const loginUser = asyncHandler(async (req: Request, res: Response) => {
     }
 
     // Default error response
-    console.error('Unexpected login error:', error);
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'An unexpected error occurred during login. Please try again later.',

@@ -23,6 +23,7 @@ import { createError } from './utils/appError';
 import 'express-async-errors';
 import './config/passport';
 import { logger, stream } from './utils/logger';
+import { initializeTransporter } from './config/email';
 
 export class App {
   public app: Application;
@@ -67,6 +68,25 @@ export class App {
     });
   }
 
+  private async initializeDatabase(): Promise<void> {
+    try {
+      if (!this.isTestEnv) {
+        await connectDB();
+        // Initialize email transporter after database connection
+        try {
+          await initializeTransporter();
+          logger.info('✅ Email transporter initialized successfully');
+        } catch (error) {
+          logger.warn('⚠️ Failed to initialize email transporter. Email functionality may be limited.');
+          logger.error('Email transporter error:', error);
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to connect to database:', error);
+      throw error;
+    }
+  }
+
   public async initialize(): Promise<Server> {
     if (this.isInitialized && this.server) {
       logger.warn('⚠️  App is already initialized');
@@ -74,8 +94,7 @@ export class App {
     }
 
     try {
-      logger.info('🔌 Initializing database connection...');
-      await connectDB();
+      await this.initializeDatabase();
 
       if (!this.isTestEnv) {
         logger.info('🚀 Starting HTTP server...');

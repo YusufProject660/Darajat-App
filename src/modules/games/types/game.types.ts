@@ -1,11 +1,13 @@
 export interface Player {
   id: string;
-  name: string;
+  userId: string;
+  username: string;
+  avatar?: string;
   score: number;
   isHost: boolean;
-  currentAnswer?: string;
-  socketId?: string;
   isReady?: boolean;
+  socketId?: string;
+  currentAnswer?: string;
 }
 
 export interface Question {
@@ -20,11 +22,34 @@ export interface Question {
 
 export interface GameRoom {
   id: string;
-  code: string;
-  status: 'lobby' | 'playing' | 'ended';
+  roomCode: string;
+  hostId: string;
   players: Player[];
   questions: Question[];
+  status: 'waiting' | 'active' | 'finished';
   currentQuestionIndex: number;
+  settings: {
+    numberOfQuestions: number;
+    maximumPlayers: number;
+    categories: {
+      [key: string]: {
+        enabled: boolean;
+        difficulty: 'easy' | 'medium' | 'hard';
+      };
+    };
+  };
+  answeredQuestions: Array<{
+    playerId: string;
+    questionId: string;
+    selectedOption: string;
+    isCorrect: boolean;
+    timeTaken: number;
+  }>;
+  results: Array<{
+    userId: string;
+    correctAnswers: number;
+    totalTime: number;
+  }>;
   startTime?: number;
   endTime?: number;
   createdAt: number;
@@ -39,6 +64,7 @@ export interface GameState {
   totalQuestions?: number;
   timeRemaining?: number;
   leaderboard?: Array<{ id: string; name: string; score: number }>;
+  settings?: GameRoom['settings'];
 }
 
 // WebSocket event types

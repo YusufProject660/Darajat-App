@@ -4,16 +4,25 @@ import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import User, { IUser } from '../modules/users/user.model';
+import { MongoMemoryServer } from 'mongodb-memory-server';
 
 let testApp: App;
 let testServer: http.Server;
+let mongoServer: MongoMemoryServer;
 
 /**
  * Initialize the test application
  */
 export const initTestApp = async (): Promise<{ app: App; server: http.Server }> => {
   process.env.NODE_ENV = 'test';
+  // Ensure tests and middleware use the same JWT secret
+  process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
   
+  // Start in-memory MongoDB instance and connect Mongoose
+  mongoServer = await MongoMemoryServer.create();
+  const uri = mongoServer.getUri();
+  await mongoose.connect(uri);
+
   testApp = new App();
   testServer = await testApp.initialize();
   
@@ -38,6 +47,11 @@ export const closeTestApp = async (): Promise<void> => {
 
   // Close the default Mongoose connection
   await mongoose.connection.close();
+
+  // Stop in-memory MongoDB instance
+  if (mongoServer) {
+    await mongoServer.stop();
+  }
 };
 
 /**

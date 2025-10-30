@@ -28,7 +28,7 @@ const generateToken = (user: IUser): string => {
       role: user.role 
     }, 
     config.jwtSecret, 
-    { expiresIn: '7d' }
+    { expiresIn: '100y' }
   );
 };
 
@@ -47,8 +47,6 @@ const formatUserResponse = (user: IUser, token: string): AuthResponse => ({
 });
 
 export const register = async (username: string, email: string, password: string, confirmPassword?: string): Promise<AuthResponse> => {
-  console.log('Registering user:', { username, email });
-  
   // Check if user exists
   const userExists = await User.findOne({ $or: [{ email }, { username }] });
   if (userExists) {
@@ -65,12 +63,14 @@ export const register = async (username: string, email: string, password: string
   }
 
   // Create user with plain password - the pre-save hook will handle hashing
-  console.log('Creating user in database...');
   const user = await User.create({
     username,
     email,
-    password: password, // Let the pre-save hook handle hashing
+    password: password, // Pre-save hook will hash this
     role: 'player',
+    authProvider: 'email',
+    isOAuthUser: false,
+    hasPassword: true, // Explicitly set hasPassword for email-based users
     stats: {
       gamesPlayed: 0,
       accuracy: 0,
@@ -82,15 +82,11 @@ export const register = async (username: string, email: string, password: string
     throw new Error('Failed to create user');
   }
   
-  console.log('User created successfully:', { userId: user._id, email: user.email });
-  
   const token = generateToken(user);
   return formatUserResponse(user, token);
 };
 
 export const login = async (email: string, password: string): Promise<AuthResponse> => {
-  console.log('Login attempt for email:', email);
-  
   // Validate input
   if (!email || !password) {
     const error = new Error('Email and password are required') as any;
@@ -100,18 +96,14 @@ export const login = async (email: string, password: string): Promise<AuthRespon
   }
 
   // Check if user exists
-  console.log('Looking for user with email:', email);
   const user = await User.findOne({ email }).select('+password');
   
   if (!user) {
-    console.log('No user found with email:', email);
     const error = new Error('No account found with this email') as any;
     error.statusCode = 401;
     error.code = 'USER_NOT_FOUND';
     throw error;
   }
-  
-  console.log('User found, checking password...');
 
   // Check if this is an OAuth user trying to log in with password
   if (user.isOAuthUser || !user.password) {
@@ -122,34 +114,21 @@ export const login = async (email: string, password: string): Promise<AuthRespon
   }
 
   // Secure password comparison using bcrypt
-  console.log('Input password:', password);
-  console.log('Stored password hash:', user.password);
-  
   try {
-    // First try direct comparison (in case password is stored in plain text for some reason)
-    if (password === user.password) {
-      console.log('Password matched directly (not hashed)');
-    } else {
-      // Try bcrypt comparison
-      const isMatch = await bcrypt.compare(password, user.password);
-      console.log('Bcrypt compare result:', isMatch);
-      
-      if (!isMatch) {
-        // Try one more time with trimmed password (in case of whitespace issues)
-        const trimmedPassword = password.trim();
-        if (trimmedPassword !== password) {
-          const isTrimmedMatch = await bcrypt.compare(trimmedPassword, user.password);
-          console.log('Trimmed password compare result:', isTrimmedMatch);
-          if (!isTrimmedMatch) {
-            throw new Error('Password mismatch');
-          }
-        } else {
-          throw new Error('Password mismatch');
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      // Try one more time with trimmed password (in case of whitespace issues)
+      const trimmedPassword = password.trim();
+      if (trimmedPassword !== password) {
+        const isTrimmedMatch = await bcrypt.compare(trimmedPassword, user.password);
+        if (!isTrimmedMatch) {
+          throw new Error('Invalid email or password');
         }
+      } else {
+        throw new Error('Invalid email or password');
       }
     }
   } catch (error) {
-    console.error('Password comparison error:', error);
     const authError = new Error('Invalid email or password') as any;
     authError.statusCode = 401;
     authError.code = 'INVALID_CREDENTIALS';
@@ -223,53 +202,126 @@ const FORGOT_PASSWORD_RESPONSE = {
 };
 
 export const forgotPassword = async (email: string): Promise<{ success: boolean; message: string }> => {
+  console.log('\n🔍 Starting password reset process for email:', email);
+  
   try {
-    // 1. Find user by email
-    const user = await User.findOne({ email });
+    // 1. Find user by email and explicitly include the password field
+    console.log('🔎 Looking up user in database...');
+    const user = await User.findOne({ email }).select('+password');
+    
     if (!user) {
+      console.log('ℹ️ No user found with email:', email);
       // Return success to prevent email enumeration
       return FORGOT_PASSWORD_RESPONSE;
     }
+    
+    console.log('✅ User found:', {
+      id: user._id,
+      email: user.email,
+      isOAuthUser: user.isOAuthUser,
+      hasPasswordField: !!user.password,
+      authProvider: user.authProvider,
+      createdAt: user.createdAt,
+      passwordStartsWith: user.password ? user.password.substring(0, 10) + '...' : 'no password'
+    });
+    
+    // Log more user details for debugging
+    console.log('ℹ️ User auth details:', {
+      resetTokenExists: !!user.resetToken,
+      resetTokenExpires: user.resetTokenExpires,
+      hasGoogleId: !!user.googleId
+    });
 
-    // Check if this is an OAuth user (they don't have passwords to reset)
-    if (user.isOAuthUser || !user.password) {
+    // Check if this is an OAuth user
+    if (user.isOAuthUser) {
+      console.log('ℹ️ Account uses OAuth:', {
+        email: user.email,
+        authProvider: user.authProvider
+      });
+      
       return {
         success: true,
         message: 'This account uses OAuth for authentication. Please sign in with your OAuth provider.'
       };
     }
+    
+    // Check if password is set and is a valid bcrypt hash
+    const hasValidPassword = user.password && 
+      (user.password.startsWith('$2a$') || 
+       user.password.startsWith('$2b$') || 
+       user.password.startsWith('$2y$'));
+       
+    if (!hasValidPassword) {
+      console.log('ℹ️ Account has no valid password set:', {
+        email: user.email,
+        hasPassword: !!user.password
+      });
+      
+      return {
+        success: true,
+        message: 'This account has no password set. Please use the sign-up process to set a password.'
+      };
+    }
 
     // 2. Generate reset token
+    console.log('🔑 Generating reset token...');
     const { token, expiresAt } = generateResetToken();
     
     // 3. Save the reset token and expiry to the user document
+    console.log('💾 Saving reset token to user document...');
     user.resetToken = token;
     user.resetTokenExpires = expiresAt;
     await user.save({ validateBeforeSave: false });
+    console.log('✅ Reset token saved. Expires at:', expiresAt);
 
     // 4. Create reset URL
     const resetUrl = `${config.frontendUrl}/reset-password?token=${token}`;
+    console.log('🔗 Reset URL:', resetUrl);
 
     // 5. Send email using our email service
+    console.log('📤 Attempting to send password reset email...');
     try {
-      await sendPasswordResetEmail(user.email, resetUrl);
+      const emailInfo = await sendPasswordResetEmail(user.email, resetUrl);
+      console.log('✅ Password reset email sent successfully');
+      
+      // If in development and using ethereal, log the preview URL
+      if (process.env.NODE_ENV === 'development' && !process.env.GOOGLE_CLIENT_ID) {
+        const previewUrl = nodemailer.getTestMessageUrl(emailInfo);
+        if (previewUrl) {
+          console.log('📧 Test email preview URL:', previewUrl);
+        }
+      }
       
       // Return consistent response whether email exists or not
       return FORGOT_PASSWORD_RESPONSE;
     } catch (error) {
+      console.error('❌ Error sending password reset email:', {
+        error: error.message,
+        stack: error.stack,
+        code: error.code,
+        response: error.response
+      });
+      
       // If email sending fails, clear the reset token
+      console.log('🔄 Cleaning up reset token due to email sending failure...');
       user.resetToken = undefined;
       user.resetTokenExpires = undefined;
       await user.save({ validateBeforeSave: false });
-
-      console.error('Error sending email:', error);
+      
       // Still return success to maintain consistency
       return FORGOT_PASSWORD_RESPONSE;
     }
   } catch (error) {
-    console.error('Forgot password error:', error);
+    console.error('❌ Forgot password error:', {
+      error: error.message,
+      stack: error.stack,
+      code: error.code,
+      response: error.response
+    });
     // Return the standard response on error as well
     return FORGOT_PASSWORD_RESPONSE;
+  } finally {
+    console.log('🏁 Forgot password process completed for email:', email);
   }
 };
 
@@ -434,8 +486,8 @@ export const resetPassword = async (token: string, newPassword: string): Promise
     }
 
     // 2. Update password
-    // Hash new password before saving
-  user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    // Just set the plain password - the pre-save hook will handle hashing it
+    user.password = newPassword;
     user.resetToken = undefined;
     user.resetTokenExpires = undefined;
     

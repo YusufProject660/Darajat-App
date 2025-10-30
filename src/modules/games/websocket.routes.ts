@@ -88,7 +88,8 @@ function getRoomStateForClients(room: RoomState) {
       username: player.username,
       score: player.score,
       isHost: player.isHost,
-      answered: player.answered
+      answered: player.answered,
+      isReady: player.isReady || false
     }))
   };
 }

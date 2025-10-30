@@ -40,6 +40,7 @@ export interface IUser extends Document {
   resetTokenExpires?: Date;
   authProvider?: 'google' | 'email';
   isOAuthUser?: boolean;
+  hasPassword?: boolean; // Explicitly track if user has a password set
   createdAt: Date;
   updatedAt: Date;
   matchPassword(enteredPassword: string): Promise<boolean>;
@@ -76,6 +77,10 @@ const userSchema = new Schema<IUser>(
       default: 'email'
     },
     isOAuthUser: {
+      type: Boolean,
+      default: false
+    },
+    hasPassword: {
       type: Boolean,
       default: false
     },
@@ -128,7 +133,15 @@ userSchema.virtual('confirmPassword')
 
 // Hash password before saving
 userSchema.pre('save', async function(this: HydratedDocument<IUser>, next) {
+  // Only hash the password if it's been modified (or is new) and is not already hashed
   if (!this.isModified('password') || !this.password) return next();
+  
+  // Check if password is already hashed
+  const isAlreadyHashed = this.password.startsWith('$2a$') || 
+                         this.password.startsWith('$2b$') || 
+                         this.password.startsWith('$2y$');
+  
+  if (isAlreadyHashed) return next();
   
   try {
     const salt = await bcrypt.genSalt(10);
