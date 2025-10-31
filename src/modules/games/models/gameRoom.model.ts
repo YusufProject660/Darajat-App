@@ -6,6 +6,7 @@ export interface IPlayer {
   avatar?: string;
   score: number;
   isHost: boolean;
+  isReady: boolean;
 }
 
 export interface IAnsweredQuestion {
@@ -63,7 +64,8 @@ const playerSchema = new Schema<IPlayer>({
   username: { type: String, required: true },
   avatar: String,
   score: { type: Number, default: 0 },
-  isHost: { type: Boolean, default: false }
+  isHost: { type: Boolean, default: false },
+  isReady: { type: Boolean, default: false }
 });
 
 const gameRoomSchema = new Schema<IGameRoom>({
@@ -71,7 +73,7 @@ const gameRoomSchema = new Schema<IGameRoom>({
   roomCode: { type: String, required: true, unique: true, uppercase: true },
   players: [playerSchema],
   settings: {
-    numberOfQuestions: { type: Number, required: true, min: 1 },
+    numberOfQuestions: { type: Number, required: true, min: 1, max: 10 },
     maximumPlayers: { type: Number, required: true, min: 2, max: 10 },
     categories: {
       type: Map,

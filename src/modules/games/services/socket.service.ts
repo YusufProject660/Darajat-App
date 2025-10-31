@@ -2,6 +2,7 @@ import { Server as HttpServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { gameService } from './game.service';
 import { ClientEvents, InterServerEvents, ServerEvents, SocketData } from '../types/game.types';
+import { logger } from '../../../utils/logger';
 
 export class SocketService {
   private static instance: SocketService;
@@ -21,11 +22,10 @@ export class SocketService {
   }
 
   private initializeSocket(): void {
-    console.log('🌐 WebSocket server is now listening for connections on path: /ws/socket.io');
+    logger.info('WebSocket server is now listening for connections on path: /ws/socket.io');
     
     this.io.on('connection', (socket: Socket<ClientEvents, ServerEvents, InterServerEvents, SocketData>) => {
-      console.log('✅ New WebSocket connection - ID:', socket.id);
-      console.log('👥 Total connected clients:', this.io.engine.clientsCount);
+      logger.info('New WebSocket connection', { socketId: socket.id, clientCount: this.io.engine.clientsCount });
 
       // Store player and room information in the socket
       socket.data = {
@@ -35,21 +35,23 @@ export class SocketService {
 
       // Handle joining a room
       socket.on('join_room', ({ roomCode, playerName, isHost = false }, callback) => {
-        console.log(`join_room event received:`, { roomCode, playerName, isHost });
+        const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        logger.info('join_room event received', { requestId, roomCode, playerName, isHost });
+        
         try {
           let room: any;
           let player: any;
 
           if (isHost) {
-            console.log(`Creating new room with code: ${roomCode}`);
+            logger.info('Creating new room', { requestId, roomCode, playerName });
             room = gameService.createRoom(playerName, roomCode);
             player = room.players[0];
           } else {
-            console.log(`Joining existing room: ${roomCode}`);
+            logger.info('Joining existing room', { requestId, roomCode, playerName });
             const result = gameService.joinRoom(roomCode, playerName);
             if (!result) {
               const errorMsg = 'Failed to join room. It may not exist or the game has already started.';
-              console.error(errorMsg);
+              logger.warn('Failed to join room', { requestId, roomCode, error: errorMsg });
               socket.emit('error', { message: errorMsg });
               if (callback) callback({ success: false, error: errorMsg });
               return;
@@ -67,8 +69,13 @@ export class SocketService {
             roomCode: room.code
           };
 
-          console.log(`Player ${playerName} (${player.id}) joined room ${room.code}`);
-          console.log(`Emitting room_joined event to socket ${socket.id}`);
+          logger.info('Player joined room', { 
+            requestId, 
+            playerName, 
+            playerId: player.id, 
+            roomCode: room.code, 
+            socketId: socket.id 
+          });
           
           // Send room data to the joining player
           socket.emit('room_joined', { 
@@ -78,7 +85,11 @@ export class SocketService {
 
           // Notify other players in the room
           if (!isHost) {
-            console.log(`Notifying other players in room ${room.code} about new player`);
+            logger.debug('Notifying other players about new player', { 
+              requestId, 
+              roomCode: room.code, 
+              playerCount: room.players.length 
+            });
             socket.to(room.code).emit('player_joined', { 
               players: room.players 
             });
@@ -86,8 +97,12 @@ export class SocketService {
 
           if (callback) callback({ success: true, room, player });
         } catch (error) {
-          console.error('Error in join_room:', error);
           const errorMsg = error instanceof Error ? error.message : 'An unknown error occurred';
+          logger.error('Error in join_room', { 
+            requestId, 
+            error: errorMsg, 
+            stack: error instanceof Error ? error.stack : undefined 
+          });
           socket.emit('error', { message: errorMsg });
           if (callback) callback({ success: false, error: errorMsg });
         }
@@ -127,7 +142,10 @@ export class SocketService {
           this.startQuestionTimer(roomCode, updatedRoom.questions[0].timeLimit);
 
         } catch (error) {
-          console.error('Error starting game:', error);
+          logger.error('Error starting game', { 
+            error: error instanceof Error ? error.message : 'Unknown error',
+            stack: error instanceof Error ? error.stack : undefined 
+          });
           socket.emit('error', { message: 'An error occurred while starting the game.' });
         }
       });
@@ -151,7 +169,12 @@ export class SocketService {
           this.updateLeaderboard(roomCode);
 
         } catch (error) {
-          console.error('Error submitting answer:', error);
+          logger.error('Error submitting answer', { 
+            error: error instanceof Error ? error.message : 'Unknown error',
+            stack: error instanceof Error ? error.stack : undefined,
+            roomCode: socket.data.roomCode,
+            playerId: socket.data.playerId
+          });
           socket.emit('error', { message: 'An error occurred while submitting your answer.' });
         }
       });
@@ -160,21 +183,21 @@ export class SocketService {
       socket.on('send_message', ({ message }) => {
         const { roomCode, playerId } = socket.data;
         if (!roomCode || !playerId) {
-          console.error('Missing roomCode or playerId in socket data');
+          logger.warn('Missing roomCode or playerId in socket data', { roomCode, playerId });
           return;
         }
 
-        console.log(`Received message from player ${playerId} in room ${roomCode}:`, message);
+        logger.debug('Received chat message', { roomCode, playerId, message });
         
         const room = gameService.getRoom(roomCode);
         if (!room) {
-          console.error(`Room ${roomCode} not found`);
+          logger.warn('Room not found', { roomCode });
           return;
         }
 
         const player = room.players.find(p => p.id === playerId);
         if (!player) {
-          console.error(`Player ${playerId} not found in room ${roomCode}`);
+          logger.warn('Player not found in room', { roomCode, playerId });
           return;
         }
 
@@ -184,7 +207,7 @@ export class SocketService {
           timestamp: new Date().toISOString()
         };
 
-        console.log('Broadcasting chat message to room', roomCode, ':', chatMessage);
+        logger.debug('Broadcasting chat message', { roomCode, message: chatMessage });
         
         // Broadcast to all clients in the room, including the sender
         this.io.in(roomCode).emit('chat_message', chatMessage);
@@ -193,10 +216,17 @@ export class SocketService {
       // Handle player ready status
       socket.on('player_ready', async ({ isReady }, callback) => {
         const { roomCode, playerId } = socket.data;
-        console.log(`Player ${playerId} ready status changed to:`, isReady);
+        const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        
+        logger.debug('Player ready status changed', { 
+          requestId,
+          roomCode, 
+          playerId, 
+          isReady 
+        });
         
         if (!roomCode || !playerId) {
-          console.error('Missing roomCode or playerId in player_ready event');
+          logger.warn('Missing roomCode or playerId in player_ready event', { requestId });
           return callback?.({
             success: false,
             error: 'Missing room code or player ID'
@@ -206,7 +236,7 @@ export class SocketService {
         try {
           const room = gameService.getRoom(roomCode);
           if (!room) {
-            console.error(`Room ${roomCode} not found`);
+            logger.warn('Room not found for player_ready', { requestId, roomCode });
             return callback?.({
               success: false,
               error: 'Room not found'
@@ -215,7 +245,7 @@ export class SocketService {
 
           const player = room.players.find(p => p.id === playerId);
           if (!player) {
-            console.error(`Player ${playerId} not found in room ${roomCode}`);
+            logger.warn('Player not found in room', { requestId, roomCode, playerId });
             return callback?.({
               success: false,
               error: 'Player not found in room'
@@ -238,7 +268,12 @@ export class SocketService {
           // Broadcast updated player list to all clients in the room
           this.io.to(roomCode).emit('players_updated', { players });
           
-          console.log(`Player ${playerId} ready status updated to ${isReady} in room ${roomCode}`);
+          logger.debug('Player ready status updated', { 
+            requestId, 
+            roomCode, 
+            playerId, 
+            isReady: player.isReady 
+          });
           
           callback?.({
             success: true,
@@ -246,7 +281,11 @@ export class SocketService {
             message: `You are now ${player.isReady ? 'ready' : 'not ready'}`
           });
         } catch (error) {
-          console.error('Error handling player_ready event:', error);
+          logger.error('Error handling player_ready event', { 
+            requestId,
+            error: error instanceof Error ? error.message : 'Unknown error',
+            stack: error instanceof Error ? error.stack : undefined 
+          });
           callback?.({
             success: false,
             error: 'Failed to update ready status'
@@ -256,11 +295,17 @@ export class SocketService {
 
       // Handle disconnection
       socket.on('disconnect', (reason) => {
-        console.log('❌ Client disconnected - ID:', socket.id, 'Reason:', reason);
-        console.log('👥 Remaining connected clients:', this.io.engine.clientsCount);
+        const { roomCode, playerId } = socket.data;
+        
+        logger.info('Client disconnected', { 
+          socketId: socket.id, 
+          reason, 
+          roomCode,
+          playerId,
+          remainingClients: this.io.engine.clientsCount 
+        });
         
         // Handle player disconnection
-        const { roomCode, playerId } = socket.data;
         if (roomCode && playerId) {
           this.handlePlayerDisconnect(roomCode, playerId, socket.id);
         }
@@ -345,27 +390,42 @@ export class SocketService {
     }
   }
 
-  private handlePlayerDisconnect(_roomCode: string, playerId: string, _socketId: string): void {
-    const result = gameService.removePlayer(playerId);
-    if (!result) return;
-
-    const { roomCode: removedRoomCode, wasHost } = result;
-    const room = gameService.getRoom(removedRoomCode);
+  private handlePlayerDisconnect(roomCode: string, playerId: string, socketId: string): void {
+    logger.info('Player disconnected from room', { roomCode, playerId, socketId });
     
-    if (room) {
-      if (wasHost && room.players.length > 0) {
-        // Notify players about the new host
-        this.io.to(removedRoomCode).emit('player_joined', { players: room.players });
-      }
-      
-      // Notify remaining players that a player has left
-      this.io.to(removedRoomCode).emit('player_left', {
-        playerId,
-        players: room.players
-      });
+    const room = gameService.getRoom(roomCode);
+    if (!room) {
+      logger.warn('Room not found during player disconnect', { roomCode });
+      return;
     }
 
-    console.log(`Player ${playerId} disconnected from room ${removedRoomCode}`);
+    const player = room.players.find(p => p.id === playerId);
+    if (!player) {
+      logger.warn('Player not found in room during disconnect', { roomCode, playerId });
+      return;
+    }
+
+    if (player.isHost) {
+      logger.info('Host left room, cleaning up', { roomCode, playerId });
+      // Handle host disconnection
+      this.cleanupRoom(roomCode);
+      this.io.to(roomCode).emit('host_disconnected');
+    } else {
+      // Remove player from room
+      room.players = room.players.filter(p => p.id !== playerId);
+      logger.info('Player removed from room', { roomCode, playerId });
+      
+      // Notify other players
+      this.io.to(roomCode).emit('player_left', { playerId });
+    }
+  }
+
+  private cleanupRoom(roomCode: string): void {
+    logger.info('Cleaning up room', { roomCode });
+    // Clear any active timers
+    this.clearRoomTimer(roomCode);
+    // Remove room from active rooms
+    gameService.removeRoom(roomCode);
   }
 
   // Clean up all resources when shutting down

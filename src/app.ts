@@ -18,8 +18,8 @@ import profileRoutes from './modules/users/routes/profile.routes';
 import gameRoutes from './modules/games/game.routes';
 import dashboardRoutes from './modules/dashboard/dashboard.routes';
 import { initializeSocket } from './modules/games/services/socket.service';
-import { globalErrorHandler, notFoundHandler } from './middlewares/error.middleware';
-import { createError } from './utils/appError';
+import { errorMiddleware, notFoundHandler } from './middlewares/error.middleware';
+import { AppError } from './utils/appError';
 import { responseFormatter } from './middlewares/responseFormatter';
 import 'express-async-errors';
 import './config/passport';
@@ -112,7 +112,7 @@ export class App {
 
       // Add health check route
       this.app.get('/health', (_req: Request, res: Response) => {
-        res.apiSuccess({ status: 'ok' }, 'Server is healthy');
+        res.status(200).json({ status: 'ok' });
       });
 
       this.isInitialized = true;
@@ -196,7 +196,7 @@ export class App {
   private initializeRoutes(): void {
     // Health check route
     this.app.get('/health', (_req: Request, res: Response) => {
-      res.apiSuccess({ status: 'ok' }, 'Server is healthy');
+      res.status(200).json({ status: 'ok' });
     });
 
     // API routes
@@ -205,23 +205,46 @@ export class App {
     if (gameRoutes) this.app.use('/api/game', gameRoutes);
     if (dashboardRoutes) this.app.use('/api/dashboard', dashboardRoutes);
 
+    this.initializeTestRoutes();
+
+    // Example decks endpoint
+    this.app.get('/api/decks', async (req: Request, res: Response) => {
+      try {
+        const { category, status } = req.query as { category?: string; status?: string };
+        const filter: { status: string; category?: string } = { status: 'active' };
+
+        if (status && status !== 'all') filter.status = status;
+        if (category && category !== 'all') filter.category = category;
+
+        res.json({
+          success: true,
+          data: { filter, message: 'Endpoint working. Implement database query here.' }
+        });
+      } catch (error) {
+        logger.error('Error in /api/decks:', error);
+        res.status(500).json({ success: false, message: 'Error fetching decks' });
+      }
+    });
+  }
+
+  private initializeTestRoutes(): void {
     // Dev test routes
     if (process.env.NODE_ENV !== 'production') {
       this.app.get('/test-error', (_req: Request, _res: Response) => {
-        throw createError.notFound('Test error message');
+        throw AppError.notFound('Test error message');
       });
 
       this.app.get('/test-errors/:type', (req: Request, res: Response) => {
         const { type } = req.params;
         switch (type) {
           case 'not-found':
-            throw createError.notFound('Resource not found');
+            throw AppError.notFound('Resource not found');
           case 'validation':
-            throw createError.badRequest('Validation failed', { field: 'email', error: 'Invalid format' });
+            throw AppError.badRequest('Validation failed', { field: 'email', error: 'Invalid format' });
           case 'unauthorized':
-            throw createError.unauthorized('Authentication required');
+            throw AppError.unauthorized('Authentication required');
           case 'forbidden':
-            throw createError.forbidden('Insufficient permissions');
+            throw AppError.forbidden('Insufficient permissions');
           case 'server-error':
             throw new Error('Unexpected server error');
           default:
@@ -269,19 +292,12 @@ export class App {
     console.log('🔌 WebSocket server initialized');
   }
 
-  private initializeErrorHandling() {
+  private initializeErrorHandling(): void {
+    // 404 handler
     this.app.all('*', notFoundHandler);
-    this.app.use(globalErrorHandler);
 
-    process.on('unhandledRejection', (err: Error) => {
-      console.error('Unhandled Rejection:', err);
-      this.server.close(() => process.exit(1));
-    });
-
-    process.on('uncaughtException', (err) => {
-      console.error('Uncaught Exception:', err);
-      this.server.close(() => process.exit(1));
-    });
+    // Global error handler
+    this.app.use(errorMiddleware);
   }
 }
 

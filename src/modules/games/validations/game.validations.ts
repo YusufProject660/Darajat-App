@@ -79,7 +79,7 @@ const createGameValidations: ValidationChain[] = [
   
   body('numberOfQuestions')
     .exists().withMessage('Number of questions is required')
-    .isInt({ min: 1, max: 50 }).withMessage('Number of questions must be between 1 and 50')
+    .isInt({ min: 1, max: 10 }).withMessage('Number of questions must be between 1 and 10')
     .toInt(),
     
   body('maximumPlayers')

@@ -3,6 +3,7 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import mongoose from 'mongoose';
 import { Question } from './models/question.model';
 import { Deck } from './models/deck.model';
+import { logger } from '../../utils/logger';
 
 interface Player {
   socketId: string;
@@ -96,19 +97,23 @@ function getRoomStateForClients(room: RoomState) {
 
 // Helper function to log all active rooms
 function logActiveRooms() {
-  console.log('\n[DEBUG] ====== ACTIVE ROOMS ======');
   if (gameRooms.size === 0) {
-    console.log('[DEBUG] No active rooms');
+    logger.debug('No active rooms');
     return;
   }
   
-  gameRooms.forEach((room, code) => {
-    console.log(`[DEBUG] Room: ${code} (${room.players.length} players, ${room.isStarted ? 'started' : 'waiting'})`);
-    room.players.forEach(p => {
-      console.log(`  - ${p.username} (${p.userId})${p.isHost ? ' [HOST]' : ''}`);
-    });
-  });
-  console.log('===============================\n');
+  const activeRooms = Array.from(gameRooms.entries()).map(([code, room]) => ({
+    roomCode: code,
+    playerCount: room.players.length,
+    status: room.isStarted ? 'started' : 'waiting',
+    players: room.players.map(p => ({
+      username: p.username,
+      userId: p.userId,
+      isHost: p.isHost
+    }))
+  }));
+  
+  logger.debug('Active rooms', { activeRooms });
 }
 
 export function createWebSocketRouter(io: SocketIOServer) {
@@ -127,7 +132,7 @@ export function createWebSocketRouter(io: SocketIOServer) {
         activeRooms: gameRooms.size
       }, 'Socket.IO service is running');
     } catch (error) {
-      console.error('Error checking socket service status:', error);
+      logger.error('Error checking socket service status', { error });
       res.apiError(
         'Error checking socket service status', 
         'SOCKET_ERROR',
@@ -161,22 +166,22 @@ export function createWebSocketRouter(io: SocketIOServer) {
 
       res.apiSuccess({ decks }, 'Decks fetched successfully');
     } catch (error) {
-      console.error('Error fetching decks:', error);
+      logger.error('Error fetching decks', { error });
       res.apiError('Failed to fetch decks', 'FETCH_ERROR');
     }
   });
 
   // Initialize socket connection
   io.on('connection', (socket: Socket) => {
-    console.log(`Player connected: ${socket.id}`);
+    logger.info(`Player connected: ${socket.id}`);
 
     // Handle room creation
     socket.on('create_room', (data: { roomCode: string; playerName: string }, callback: (response: any) => void) => {
       const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-      console.log(`[${requestId}] Create room request:`, data);
+      logger.info(`Create room request [${requestId}]`, { requestData: data });
       
       if (!data || !data.roomCode || !data.playerName) {
-        console.error(`[${requestId}] Invalid create_room data:`, data);
+        logger.warn(`Invalid create_room data [${requestId}]`, { requestData: data });
         return callback({
           success: false,
           error: 'Room code and player name are required',
@@ -189,14 +194,14 @@ export function createWebSocketRouter(io: SocketIOServer) {
       const trimmedPlayerName = playerName.trim();
       
       try {
-        console.log(`[${requestId}] Creating room ${trimmedRoomCode} for player ${trimmedPlayerName}`);
+        logger.info(`Creating room [${requestId}]`, { roomCode: trimmedRoomCode, playerName: trimmedPlayerName });
         
         // Check if room already exists (case-insensitive)
         const existingRoom = Array.from(gameRooms.entries())
           .find(([code]) => code.toUpperCase() === trimmedRoomCode);
           
         if (existingRoom) {
-          console.log(`[${requestId}] Room ${trimmedRoomCode} already exists`);
+          logger.warn(`Room already exists [${requestId}]`, { roomCode: trimmedRoomCode });
           return callback({
             success: false,
             error: 'Room already exists',
@@ -249,12 +254,12 @@ export function createWebSocketRouter(io: SocketIOServer) {
           timestamp: new Date().toISOString()
         };
         
-        console.log(`[${requestId}] Room ${trimmedRoomCode} created successfully`);
+        logger.info(`Room created successfully [${requestId}]`, { roomCode: trimmedRoomCode });
         callback(response);
         
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        console.error(`[${requestId}] Error creating room:`, errorMsg, error);
+        logger.error(`Error creating room [${requestId}]`, { error: errorMsg, stack: error instanceof Error ? error.stack : undefined });
         
         callback({
           success: false,
@@ -269,14 +274,14 @@ export function createWebSocketRouter(io: SocketIOServer) {
     // Join room handler with enhanced debugging and error handling
     socket.on('join_room', async (data: { roomCode: string; playerName: string }, callback: (response: any) => void) => {
       const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-      console.log(`[${requestId}] Join room request:`, data);
+      logger.info(`Join room request [${requestId}]`, { requestData: data });
 
       try {
         const { roomCode, playerName } = data;
         
         // Input validation
         if (!roomCode || !playerName) {
-          console.error(`[${requestId}] Missing required fields`);
+          logger.warn(`Missing required fields [${requestId}]`, { roomCode: Boolean(roomCode), playerName: Boolean(playerName) });
           return callback({ 
             success: false, 
             error: 'Room code and player name are required',
@@ -293,7 +298,7 @@ export function createWebSocketRouter(io: SocketIOServer) {
           .find(([code]) => code.toUpperCase() === trimmedRoomCode) || [];
 
         if (!room) {
-          console.error(`[${requestId}] Room not found: ${trimmedRoomCode}`);
+          logger.warn(`Room not found [${requestId}]`, { roomCode: trimmedRoomCode });
           return callback({ 
             success: false, 
             error: 'Room not found. Please check the room code.',

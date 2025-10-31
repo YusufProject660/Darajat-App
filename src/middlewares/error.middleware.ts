@@ -1,108 +1,47 @@
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/appError';
 
-/**
- * Handle MongoDB CastError (invalid ID format, etc.)
- */
-const handleCastErrorDB = (err: any): AppError => {
-  const message = `Invalid ${err.path}: ${err.value}`;
-  return new AppError(message, 400, 'INVALID_INPUT');
-};
+export const errorMiddleware = (err: any, _req: Request, res: Response, _next: NextFunction) => {
+  let error = err;
 
-/**
- * Handle MongoDB duplicate field errors
- */
-const handleDuplicateFieldsDB = (err: any): AppError => {
-  const value = err.errmsg?.match(/(["'].*["'])/)?.[0] || 'a document';
-  const message = `Duplicate field value: ${value}. Please use another value!`;
-  return new AppError(message, 400, 'DUPLICATE_FIELD');
-};
-
-/**
- * Handle MongoDB validation errors
- */
-const handleValidationErrorDB = (err: any): AppError => {
-  const errors = Object.values(err.errors).map((el: any) => el.message);
-  const message = `Invalid input data. ${errors.join('. ')}`;
-  return new AppError(message, 400, 'VALIDATION_ERROR', true, errors);
-};
-
-/**
- * Handle JWT authentication errors
- */
-const handleJWTError = (): AppError =>
-  new AppError('Invalid token. Please log in again!', 401, 'INVALID_TOKEN');
-
-/**
- * Handle expired JWT tokens
- */
-const handleJWTExpiredError = (): AppError =>
-  new AppError('Your token has expired! Please log in again.', 401, 'TOKEN_EXPIRED');
-
-/**
- * Send error response using the API formatter
- */
-const sendError = (err: AppError, _req: Request, res: Response) => {
-  // Log error in development
   if (process.env.NODE_ENV === 'development') {
     console.error('Error:', {
-      status: err.statusCode,
-      message: err.message,
-      stack: err.stack,
-      ...(err.details && { details: err.details })
+      status: error.statusCode,
+      message: error.message,
+      stack: error.stack,
+      details: error.details
     });
   }
 
-  // Prepare error details
-  const errorDetails = process.env.NODE_ENV === 'development' 
-    ? { 
-        ...(err.stack && { stack: err.stack }),
-        ...(err.details && { details: err.details })
-      }
-    : (err.details ? { details: err.details } : undefined);
-
-  // Use response formatter for consistent error responses
-  res.apiError(
-    err.message,
-    err.code || 'INTERNAL_ERROR',
-    errorDetails
-  );
-};
-
-/**
- * Global error handler middleware
- */
-export const globalErrorHandler = (
-  err: any,
-  req: Request,
-  res: Response,
-  _next: NextFunction
-) => {
-  let error = { ...err };
-  error.message = err.message;
-  error.stack = err.stack;
-
   // Handle specific error types
-  if (err.name === 'CastError') error = handleCastErrorDB(err);
-  if (err.code === 11000) error = handleDuplicateFieldsDB(err);
-  if (err.name === 'ValidationError') error = handleValidationErrorDB(err);
-  if (err.name === 'JsonWebTokenError') error = handleJWTError();
-  if (err.name === 'TokenExpiredError') error = handleJWTExpiredError();
+  if (error.name === 'CastError') {
+    error = AppError.badRequest(`Invalid ${error.path}: ${error.value}`);
+  } else if (error.code === 11000) {
+    const value = error.errmsg?.match(/(["'].*["'])/)?.[0] || 'a document';
+    error = AppError.badRequest(`Duplicate field value: ${value}. Please use another value!`);
+  } else if (error.name === 'ValidationError') {
+    const errors = Object.values(error.errors).map((el: any) => el.message);
+    error = AppError.badRequest('Validation failed', { errors });
+  } else if (error.name === 'JsonWebTokenError') {
+    error = AppError.unauthorized('Invalid token. Please log in again!');
+  } else if (error.name === 'TokenExpiredError') {
+    error = AppError.unauthorized('Your token has expired! Please log in again.');
+  }
 
-  // Default to 500 if status code not set
-  error.statusCode = error.statusCode || 500;
-  error.message = error.message || 'Internal Server Error';
+  // If it's not an AppError, create a generic one
+  if (!(error instanceof AppError)) {
+    error = new AppError(error.message || 'Internal Server Error', 500);
+  }
 
-  sendError(error, req, res);
+  // Send error response
+  res.status(error.statusCode).json({
+    success: false,
+    message: error.message,
+    statusCode: error.statusCode,
+    ...(error.details && { details: error.details })
+  });
 };
 
-// 404 Not Found handler
-export const notFoundHandler = (req: Request, res: Response) => {
-  res.apiError(
-    `Can't find ${req.originalUrl} on this server!`,
-    'NOT_FOUND',
-    { path: req.originalUrl }
-  );
+export const notFoundHandler = (req: Request, _res: Response, next: NextFunction) => {
+  next(AppError.notFound(`Can't find ${req.originalUrl} on this server!`));
 };
-
-export default globalErrorHandler;

@@ -16,7 +16,8 @@ import {
   finishGame,
   startGame,
   kickPlayer,
-  updateGameSettings
+  updateGameSettings,
+  toggleReadyStatus
 } from './game.controller';
 
 const router = express.Router();
@@ -100,6 +101,13 @@ interface IFinishGameRequest extends Request {
 
 // Host-only routes
 router.patch('/finish/:roomCode', protect, isHost, (req: IFinishGameRequest, res: Response, next) => finishGame(req, res, next));
+
+/**
+ * @route   PATCH /api/game/:roomCode/ready
+ * @desc    Toggle player's ready status
+ * @access  Private
+ */
+router.patch('/:roomCode/ready', protect, (req: Request, res: Response, next: NextFunction) => toggleReadyStatus(req, res, next));
 
 /**
  * @route   POST /api/game/:roomCode/start

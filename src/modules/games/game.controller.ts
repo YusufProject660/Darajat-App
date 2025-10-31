@@ -8,6 +8,7 @@ import User from '../users/user.model';
 import { Question } from './models/question.model';
 import { generateUniqueRoomCode } from './utils/generateRoomCode';
 import { IUser } from '../users/user.model';
+import { logger } from '../../utils/logger';
 
 interface IGameRequest extends Request {
   user?: IUser;
@@ -54,7 +55,7 @@ interface IGameLobbyRequest extends Request {
 
     // Validate categories structure
     if (!categories || typeof categories !== 'object' || Object.keys(categories).length === 0) {
-      console.error('[createGame] 400: categories missing or empty');
+      logger.error('[createGame] 400: categories missing or empty');
       return res.status(400).json({
         status: 'error',
         message: 'At least one category must be enabled'
@@ -62,14 +63,14 @@ interface IGameLobbyRequest extends Request {
     }
 
     // Validate number of questions
-    if (typeof numberOfQuestions !== 'number' || numberOfQuestions < 1 || numberOfQuestions > 50) {
-      console.error('[createGame] 400: invalid numberOfQuestions');
-      return res.apiError('Number of questions must be between 1 and 50', 'INVALID_INPUT');
+    if (typeof numberOfQuestions !== 'number' || numberOfQuestions < 1 || numberOfQuestions > 10) {
+      logger.error('[createGame] 400: invalid numberOfQuestions');
+      return res.apiError('Number of questions must be between 1 and 10', 'INVALID_INPUT');
     }
 
     // Validate maximum players
     if (typeof maximumPlayers !== 'number' || maximumPlayers < 2 || maximumPlayers > 10) {
-      console.error('[createGame] 400: invalid maximumPlayers');
+      logger.error('[createGame] 400: invalid maximumPlayers');
       return res.apiError('Maximum players must be between 2 and 10', 'INVALID_INPUT');
     }
 
@@ -101,7 +102,7 @@ interface IGameLobbyRequest extends Request {
     }
 
     if (enabledCategories.length === 0) {
-      console.error('[createGame] 400: no enabled categories after processing');
+      logger.error('[createGame] 400: no enabled categories after processing');
       return res.status(400).json({
         status: 'error',
         message: 'At least one category must be enabled'
@@ -144,7 +145,7 @@ interface IGameLobbyRequest extends Request {
     const allQuestions = questionsResults.flat();
 
     if (allQuestions.length === 0) {
-      console.error('[createGame] 400: no questions found');
+      logger.error('[createGame] 400: no questions found');
       return res.apiError('No questions found for the selected categories', 'NOT_FOUND');
     }
 
@@ -154,7 +155,7 @@ interface IGameLobbyRequest extends Request {
       .slice(0, numberOfQuestions);
 
     if (shuffledQuestions.length === 0) {
-      console.error('[createGame] 400: shuffledQuestions empty');
+      logger.error('[createGame] 400: shuffledQuestions empty');
       return res.apiError('No questions found for the selected categories and difficulty levels', 'NOT_FOUND');
     }
 
@@ -202,11 +203,11 @@ interface IGameLobbyRequest extends Request {
       // Use the centralized response format
       return res.apiSuccess(populatedGame, 'Game created successfully');
     } catch (error) {
-      console.error('Error in createGame:', error);
+      logger.error('Error in createGame:', error);
       return res.apiError('Failed to create game room', 'GAME_CREATION_FAILED');
     }
   } catch (error) {
-    console.error('Unexpected error in createGame:', error);
+    logger.error('Unexpected error in createGame:', error);
     return res.apiError('An unexpected error occurred', 'INTERNAL_SERVER_ERROR');
   }
 };
@@ -397,7 +398,7 @@ interface PlayerStats {
       'question options difficulty category correctAnswer explanation source'
     ).lean();
     
-    console.log('Fetched questions:', JSON.stringify(questions, null, 2)); // Debug log
+    logger.debug('Fetched questions:', { questions });
 
     if (!gameRoom) {
       return res.apiError('Game room not found', 'NOT_FOUND');
@@ -415,7 +416,7 @@ interface PlayerStats {
     // Map questions to ensure consistent response format
     const formattedQuestions = questions.map(q => {
       // Debug log each question
-      console.log('Processing question:', {
+      logger.debug('Processing question:', {
         id: q._id,
         hasQuestion: !!q.question,
         question: q.question,
@@ -442,7 +443,7 @@ interface PlayerStats {
       totalQuestions: gameRoom.settings?.numberOfQuestions || formattedQuestions.length
     }, 'Questions retrieved successfully');
   } catch (error: unknown) {
-    console.error('Error getting questions:', error);
+    logger.error('Error getting questions:', error);
     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
     return res.apiError('Failed to get questions', 'SERVER_ERROR', 
       process.env.NODE_ENV === 'development' ? { error: errorMessage } : undefined
@@ -589,7 +590,7 @@ const getGameSummary = async (req: Request, res: Response, next: NextFunction) =
     });
 
   } catch (error) {
-    console.error('Error getting game summary:', error);
+    logger.error('Error getting game summary:', error);
     return res.apiError(
       'Server error', 
       'INTERNAL_ERROR',
@@ -745,23 +746,11 @@ interface IGameLeaderboardRequest extends Request {
         }
       }
     });
-
   } catch (error) {
-    console.error('Error fetching leaderboard:', error);
-    res.status(200).json({
-      status: 0,
-      message: 'Failed to fetch leaderboard'
-    });
+    logger.error('Error in getGameLeaderboard:', error);
+    next(new AppError('Failed to get game leaderboard', 500));
   }
 };
-
-// Interface for finish game request
-interface IFinishGameRequest extends Request {
-  params: {
-    roomCode: string;
-  };
-  user?: IUser;
-}
 
 /**
  * @desc    Finish a game and update player stats
@@ -770,13 +759,19 @@ interface IFinishGameRequest extends Request {
  */
 const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunction) => {
   const { roomCode } = req.params;
+  const session = await mongoose.startSession();
+  session.startTransaction();
   
   try {
+    logger.info(`Finishing game for room: ${roomCode}`);
+    
     // Input validation
     if (!roomCode || typeof roomCode !== 'string' || roomCode.trim() === '') {
+      logger.warn('Invalid room code provided');
       return res.status(200).json({
         status: 0,
-        message: 'Room code is required'
+        message: 'Room code is required',
+        error: 'INVALID_ROOM_CODE'
       });
     }
 
@@ -784,29 +779,43 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
     const gameRoom = await GameRoom.findOne({ 
       roomCode: { $regex: new RegExp(`^${roomCode}$`, 'i') }
     })
-      .populate<{ players: IPlayer[] }>('players.userId', 'stats');
+      .populate<{ players: IPlayer[] }>('players.userId', 'stats')
+      .session(session);
 
     if (!gameRoom) {
+      logger.warn(`Game room not found: ${roomCode}`);
       return res.status(200).json({
         status: 0,
-        message: 'Game not found'
+        message: 'Game not found',
+        error: 'GAME_NOT_FOUND'
       });
     }
 
     // Check game status
     if (gameRoom.status === 'finished' || gameRoom.status === 'completed') {
+      logger.warn(`Game already finished: ${roomCode}`);
       return res.status(200).json({
         status: 0,
-        message: 'Game is already finished'
+        message: 'Game is already finished',
+        error: 'GAME_ALREADY_FINISHED'
       });
     }
 
     // Additional validation - check if game has started
     if (gameRoom.status !== 'active') {
+      logger.warn(`Game not in finishable state: ${roomCode}, status: ${gameRoom.status}`);
       return res.status(200).json({
         status: 0,
-        message: 'Game is not in a finishable state'
+        message: 'Game is not in a finishable state',
+        error: 'INVALID_GAME_STATE',
+        currentStatus: gameRoom.status
       });
+    }
+
+    // Validate game data
+    if (!gameRoom.players || !Array.isArray(gameRoom.players)) {
+      logger.error(`Invalid players data for room: ${roomCode}`);
+      throw new Error('Invalid game room state: missing or invalid players array');
     }
 
     // Calculate stats
@@ -816,8 +825,10 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
     const totalTime = answered.reduce((sum: number, q: any) => sum + (q.timeTaken || 0), 0);
     const accuracy = totalQuestions > 0 ? Math.round((correct / totalQuestions) * 100) : 0;
 
-    // Update game room status
-    gameRoom.status = 'completed';
+    logger.info(`Calculated stats - Questions: ${totalQuestions}, Correct: ${correct}, Accuracy: ${accuracy}%`);
+
+    // Update game room status - must be one of: 'waiting', 'active', or 'finished'
+    gameRoom.status = 'finished';
     gameRoom.finishedAt = new Date();
     
     // Update game stats
@@ -828,51 +839,69 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       totalTime,
       totalQuestions,
       correctAnswers: correct,
-      averageTimePerQuestion: answered.length > 0 ? totalTime / answered.length : 0
+      averageTimePerQuestion: answered.length > 0 ? Math.round(totalTime / answered.length) : 0
     };
 
-    await gameRoom.save();
+    // Save game room updates within the transaction
+    await gameRoom.save({ session });
+    logger.info(`Game room ${roomCode} marked as completed`);
 
-    // Update player stats
+    // Update player stats with error handling for each player
     const updatePromises = gameRoom.players.map(async (player: IPlayer) => {
-      if (!player.userId) return null;
-      
-      const playerAnswers = answered.filter((a: any) => 
-        a.playerId && a.playerId.toString() === player.userId.toString()
-      );
-      
-      const playerCorrect = playerAnswers.filter((a: any) => a.isCorrect).length;
-
-      const update: any = {
-        $inc: { 
-          'stats.gamesPlayed': 1,
-          'stats.totalCorrectAnswers': playerCorrect,
-          'stats.totalQuestionsAnswered': playerAnswers.length,
-          'stats.totalTimePlayed': totalTime
-        },
-        $max: { 'stats.bestScore': player.score || 0 }
-      };
-
-      // Calculate new average accuracy
-      const user = await User.findById(player.userId);
-      if (user) {
-        const currentTotalCorrect = user.stats?.totalCorrectAnswers || 0;
-        const currentTotalQuestions = user.stats?.totalQuestionsAnswered || 0;
-        const newTotalCorrect = currentTotalCorrect + playerCorrect;
-        const newTotalQuestions = currentTotalQuestions + playerAnswers.length;
-        
-        update.$set = {
-          ...update.$set,
-          'stats.averageAccuracy': newTotalQuestions > 0 
-            ? Math.round((newTotalCorrect / newTotalQuestions) * 100)
-            : 0
-        };
+      if (!player.userId) {
+        logger.warn('Player missing userId, skipping update');
+        return null;
       }
+      
+      try {
+        const playerId = player.userId.toString();
+        const playerAnswers = answered.filter((a: any) => 
+          a.playerId && a.playerId.toString() === playerId
+        );
+        
+        const playerCorrect = playerAnswers.filter((a: any) => a.isCorrect).length;
+        logger.debug(`Updating stats for player ${playerId}: ${playerCorrect} correct out of ${playerAnswers.length}`);
 
-      return User.findByIdAndUpdate(player.userId, update, { new: true });
+        const update: any = {
+          $inc: { 
+            'stats.gamesPlayed': 1,
+            'stats.totalCorrectAnswers': playerCorrect,
+            'stats.totalQuestionsAnswered': playerAnswers.length,
+            'stats.totalTimePlayed': totalTime
+          },
+          $max: { 'stats.bestScore': player.score || 0 }
+        };
+
+        // Calculate new average accuracy
+        const user = await User.findById(playerId).session(session);
+        if (user) {
+          const currentTotalCorrect = user.stats?.totalCorrectAnswers || 0;
+          const currentTotalQuestions = user.stats?.totalQuestionsAnswered || 0;
+          const newTotalCorrect = currentTotalCorrect + playerCorrect;
+          const newTotalQuestions = currentTotalQuestions + playerAnswers.length;
+          
+          update.$set = {
+            ...update.$set,
+            'stats.averageAccuracy': newTotalQuestions > 0 
+              ? Math.round((newTotalCorrect / newTotalQuestions) * 100)
+              : 0
+          };
+        }
+
+        return User.findByIdAndUpdate(playerId, update, { new: true, session });
+      } catch (error) {
+        logger.error(`Error updating player ${player.userId} stats:`, error);
+        return null; // Continue with other players if one fails
+      }
     });
 
-    await Promise.all(updatePromises);
+    // Wait for all player updates to complete
+    const results = await Promise.all(updatePromises);
+    const successfulUpdates = results.filter(r => r !== null).length;
+    
+    // Commit the transaction
+    await session.commitTransaction();
+    logger.info(`Successfully finished game ${roomCode}. Updated ${successfulUpdates} players.`);
 
     return res.status(200).json({
       status: 1,
@@ -882,14 +911,28 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
         status: gameRoom.status,
         finishedAt: gameRoom.finishedAt,
         stats: gameRoom.stats,
-        playersUpdated: gameRoom.players.length
+        playersUpdated: successfulUpdates,
+        totalPlayers: gameRoom.players.length
       }
     });
   } catch (error) {
-    return res.status(200).json({ 
+    // Rollback the transaction on error
+    await session.abortTransaction();
+    
+    // Log the full error for debugging
+    logger.error('Error finishing game:', error);
+    
+    // Return appropriate error response
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return res.status(500).json({ 
       status: 0, 
-      message: 'Failed to finish game' 
+      message: 'Failed to finish game',
+      error: 'FINISH_GAME_ERROR',
+      details: process.env.NODE_ENV === 'development' ? errorMessage : undefined
     });
+  } finally {
+    // End the session
+    session.endSession();
   }
 }
 
@@ -1092,12 +1135,54 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
 // @desc    Start a game
 // @route   POST /api/game/:roomCode/start
 // @access  Private (Host only)
-const startGame = async (req: Request, res: Response) => {
+const startGame = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const game = (req as any).game;
-    const userId = (req as any).user._id;
+    const { roomCode } = req.params;
+    const userId = (req as any).user?._id;
 
-    console.log(`Starting game for room: ${game.roomCode}, user: ${userId}`);
+    // Find the game room
+    const game = await GameRoom.findOne({ roomCode });
+    if (!game) {
+      return res.status(200).json({
+        status: 0,
+        message: 'Game room not found',
+        data: {}
+      });
+    }
+
+    // Check if the user is the host
+    const isHost = game.players.some(
+      p => p.userId.toString() === userId.toString() && p.isHost
+    );
+
+    if (!isHost) {
+      return res.status(200).json({
+        status: 0,
+        message: 'Only the host can start the game',
+        data: {}
+      });
+    }
+
+    // Check if all players are ready
+    const allPlayersReady = game.players.every(player => player.isReady || player.isHost);
+    if (!allPlayersReady) {
+      return res.status(200).json({
+        status: 0,
+        message: 'All players must be ready before starting the game',
+        data: {}
+      });
+    }
+
+    // Check if there are at least 2 players
+    if (game.players.length < 2) {
+      return res.status(200).json({
+        status: 0,
+        message: 'At least 2 players are required to start the game',
+        data: {}
+      });
+    }
+
+    logger.info(`Starting game for room: ${game.roomCode}, user: ${userId}`);
     
     // Start the game and get updated room with populated data
     const updatedGame = await gameService.startGame(game.roomCode, userId);
@@ -1107,7 +1192,7 @@ const startGame = async (req: Request, res: Response) => {
     }
 
     // Log the successful start
-    console.log('Game started successfully:', {
+    logger.info('Game started successfully', {
       gameId: updatedGame._id,
       status: updatedGame.status,
       playerCount: updatedGame.players?.length || 0,
@@ -1126,20 +1211,24 @@ const startGame = async (req: Request, res: Response) => {
         }
       : null;
     
-    // Return the response with proper counts
-    res.apiSuccess({
-      game: {
-        id: updatedGame._id.toString(),
-        roomCode: updatedGame.roomCode,
-        status: updatedGame.status,
-        playerCount: updatedGame.players?.length || 0,
-        questionCount: updatedGame.questions?.length || 0,
-        currentQuestionIndex: updatedGame.currentQuestionIndex || 0,
-        settings: updatedGame.settings || {}
-      },
-      firstQuestion,
-      totalQuestions: updatedGame.questions?.length || 0
-    }, 'Game started successfully');
+    // Return the success response with 200 status code
+    return res.status(200).json({
+      status: 1,
+      message: 'Game started successfully',
+      data: {
+        game: {
+          id: updatedGame._id.toString(),
+          roomCode: updatedGame.roomCode,
+          status: updatedGame.status,
+          playerCount: updatedGame.players?.length || 0,
+          questionCount: updatedGame.questions?.length || 0,
+          currentQuestionIndex: updatedGame.currentQuestionIndex || 0,
+          settings: updatedGame.settings || {}
+        },
+        firstQuestion,
+        totalQuestions: updatedGame.questions?.length || 0
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -1200,11 +1289,11 @@ const updateGameSettings = async (req: Request, res: Response, next: NextFunctio
     // Validate request body
     const { default: Joi } = await import('joi');
     const gameSettingsSchema = {
-      numberOfQuestions: Joi.number().integer().min(1).max(50).messages({
+      numberOfQuestions: Joi.number().integer().min(1).max(10).messages({
         'number.base': 'Number of questions must be a number',
         'number.integer': 'Number of questions must be an integer',
         'number.min': 'Number of questions must be at least 1',
-        'number.max': 'Number of questions cannot exceed 50'
+        'number.max': 'Number of questions cannot exceed 10'
       }),
       maximumPlayers: Joi.number().integer().min(2).max(10).messages({
         'number.base': 'Maximum players must be a number',
@@ -1324,16 +1413,14 @@ const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: NextFun
       return next(new AppError('User not authenticated', 401));
     }
 
-    // Get the game room with populated players
-    const gameRoom = await gameService.getRoomByCode(roomCode, { 
-      populate: [
-        'players.userId',
-        'hostId'
-      ]
-    });
+    // Get the game room with populated players using gameService
+    const gameRoom = await GameRoom.findOne({ roomCode })
+      .populate('players.userId')
+      .populate('hostId')
+      .lean();
 
     if (!gameRoom) {
-      return next(new AppError('Game room not found', 404));
+      return next(new AppError('Game room not found', 200));
     }
 
     // Check if the user is a player in this game
@@ -1356,6 +1443,7 @@ const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: NextFun
         username: player.userId.username,
         avatar: player.avatar,
         isHost: player.isHost,
+        isReady: player.isReady,
         score: player.score
       })),
       settings: {
@@ -1375,8 +1463,80 @@ const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: NextFun
 
     res.apiSuccess(response);
   } catch (error) {
-    console.error('Error in getGameLobby:', error);
+    logger.error('Error in getGameLobby:', error);
     next(new AppError('Failed to get game lobby', 500));
+  }
+};
+
+// Interface for toggle ready status request
+interface IToggleReadyStatusRequest extends Request {
+  params: {
+    roomCode: string;
+  };
+  body: {
+    isReady: boolean;
+  };
+  user?: IUser;
+}
+
+/**
+ * @desc    Toggle player's ready status
+ * @route   PATCH /api/game/:roomCode/ready
+ * @access  Private
+ */
+const toggleReadyStatus = async (req: IToggleReadyStatusRequest, res: Response, next: NextFunction) => {
+  try {
+    const { roomCode } = req.params;
+    const { isReady } = req.body;
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return next(new AppError('User not authenticated', 401));
+    }
+
+    if (typeof isReady !== 'boolean') {
+      return next(new AppError('isReady must be a boolean value', 400));
+    }
+
+    // Find the game room
+    const gameRoom = await GameRoom.findOne({ roomCode });
+    if (!gameRoom) {
+      return next(new AppError('Game room not found', 404));
+    }
+
+    // Check if game has already started
+    if (gameRoom.status !== 'waiting') {
+      return next(new AppError('Game has already started', 400));
+    }
+
+    // Find the player in the game room
+    const playerIndex = gameRoom.players.findIndex(
+      (p: IPlayer) => p.userId.toString() === userId.toString()
+    );
+
+    if (playerIndex === -1) {
+      return next(new AppError('You are not a player in this game', 403));
+    }
+
+    // Toggle the ready status
+    gameRoom.players[playerIndex].isReady = isReady;
+    await gameRoom.save();
+
+    // Emit socket event to notify other players
+    // This requires your socket implementation to be set up
+    // io.to(roomCode).emit('playerReadyStatusChanged', {
+    //   playerId: userId,
+    //   isReady
+    // });
+
+    res.apiSuccess({
+      playerId: userId,
+      isReady,
+      message: `You are now ${isReady ? 'ready' : 'not ready'}`
+    });
+  } catch (error) {
+    logger.error('Error in toggleReadyStatus:', error);
+    next(new AppError('Failed to update ready status', 500));
   }
 };
 
@@ -1384,6 +1544,7 @@ export {
   createGame,
   getGameRoom,
   joinGame,
+  toggleReadyStatus,
   getGameLobby,
   leaveGame,
   getQuestions,
