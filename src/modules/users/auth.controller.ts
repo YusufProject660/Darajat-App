@@ -253,28 +253,33 @@ export const googleAuthFailure = (_req: Request, res: Response) => {
 // @desc    Forgot Password
 // @route   POST /api/auth/forgot-password
 // @access  Public
-export const requestPasswordReset = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+export const requestPasswordReset = asyncHandler(async (req: Request, res: Response) => {
   const { email } = req.body;
 
   // Validate email
   if (!email) {
-    return next(new AppError('Email is required', 400));
+    return res.status(200).json({
+      status: 0,
+      message: 'Email is required'
+    });
   }
 
-  // Call the forgot password service
-  const result = await forgotPassword(email);
-  
-  // If email not found, still return success to prevent email enumeration
-  if (!result.success) {
-    // Log the error but still return success to the client
-    console.error('Password reset request failed:', result.message);
+  try {
+    // Call the forgot password service
+    const result = await forgotPassword(email);
+    
+    // Return the result from the service
+    return res.status(200).json({
+      status: result.status,
+      message: result.message
+    });
+  } catch (error) {
+    console.error('Error in password reset request:', error);
+    return res.status(200).json({
+      status: 0,
+      message: 'An error occurred while processing your request.'
+    });
   }
-
-  // Always return success to prevent email enumeration
-  res.status(201).json({
-    success: true,
-    message: 'If an account with that email exists, a password reset link has been sent.'
-  });
 });
 
 // @desc    Reset Password

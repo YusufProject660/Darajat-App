@@ -222,13 +222,7 @@ export const googleAuth = async (profile: any): Promise<AuthResponse> => {
   return formatUserResponse(user, token);
 }
 
-// Consistent response message to prevent email enumeration
-const FORGOT_PASSWORD_RESPONSE = {
-  success: true,
-  message: 'If an account with that email exists, a password reset link has been sent.'
-};
-
-export const forgotPassword = async (email: string): Promise<{ success: boolean; message: string }> => {
+export const forgotPassword = async (email: string): Promise<{ status: number; message: string }> => {
   console.log('\n🔍 Starting password reset process for email:', email);
   
   try {
@@ -238,8 +232,10 @@ export const forgotPassword = async (email: string): Promise<{ success: boolean;
     
     if (!user) {
       console.log('ℹ️ No user found with email:', email);
-      // Return success to prevent email enumeration
-      return FORGOT_PASSWORD_RESPONSE;
+      return {
+        status: 0,
+        message: 'No account found with this email address.'
+      };
     }
     
     console.log('✅ User found:', {
@@ -319,8 +315,10 @@ export const forgotPassword = async (email: string): Promise<{ success: boolean;
         }
       }
       
-      // Return consistent response whether email exists or not
-      return FORGOT_PASSWORD_RESPONSE;
+      return {
+        status: 1,
+        message: 'Password reset link sent successfully.'
+      };
     } catch (error) {
       console.error('❌ Error sending password reset email:', {
         error: error.message,
@@ -345,8 +343,10 @@ export const forgotPassword = async (email: string): Promise<{ success: boolean;
       code: error.code,
       response: error.response
     });
-    // Return the standard response on error as well
-    return FORGOT_PASSWORD_RESPONSE;
+    return {
+      status: 0,
+      message: 'Failed to process password reset request.'
+    };
   } finally {
     console.log('🏁 Forgot password process completed for email:', email);
   }

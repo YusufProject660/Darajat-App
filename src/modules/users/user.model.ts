@@ -1,23 +1,23 @@
 import { Schema, model, Document, models, HydratedDocument } from 'mongoose';
 import bcrypt from 'bcryptjs';
 
-// Interface for User document
-export interface ISerializedUser {
-  _id: string;
-  id: string;
-  username: string;
-  email: string;
-  avatar?: string;
-  googleId?: string;
-  stats: {
-    gamesPlayed: number;
-    accuracy: number;
-    bestScore: number;
-  };
-  role: 'player' | 'admin';
-  createdAt: Date;
-  updatedAt: Date;
-}
+// UNUSED: Not referenced anywhere in the codebase
+// export interface ISerializedUser {
+//   _id: string;
+//   id: string;
+//   username: string;
+//   email: string;
+//   avatar?: string;
+//   googleId?: string;
+//   stats: {
+//     gamesPlayed: number;
+//     accuracy: number;
+//     bestScore: number;
+//   };
+//   role: 'player' | 'admin';
+//   createdAt: Date;
+//   updatedAt: Date;
+// }
 
 export interface IUser extends Document {
   _id: Schema.Types.ObjectId;
@@ -30,10 +30,11 @@ export interface IUser extends Document {
     gamesPlayed: number;
     accuracy: number;
     bestScore: number;
-    totalCorrectAnswers?: number;
-    totalQuestionsAnswered?: number;
-    totalTimePlayed?: number;
-    averageAccuracy?: number;
+    // UNUSED: Not referenced in the codebase
+    // totalCorrectAnswers?: number;
+    // totalQuestionsAnswered?: number;
+    // totalTimePlayed?: number;
+    // averageAccuracy?: number;
   };
   role: 'player' | 'admin';
   resetToken?: string;
@@ -44,8 +45,9 @@ export interface IUser extends Document {
   createdAt: Date;
   updatedAt: Date;
   matchPassword(enteredPassword: string): Promise<boolean>;
-  confirmPassword?: string; // Virtual field for password confirmation
-  _confirmPassword?: string; // Backing field for the virtual
+  // UNUSED: Virtual field for password confirmation (commented out below)
+  // confirmPassword?: string;
+  // _confirmPassword?: string; // Backing field for the virtual
 }
 
 const userSchema = new Schema<IUser>(
@@ -126,10 +128,10 @@ const userSchema = new Schema<IUser>(
   }
 );
 
-// Add virtual for confirmPassword
-userSchema.virtual('confirmPassword')
-  .get(function(this: IUser) { return this._confirmPassword; })
-  .set(function(this: IUser, value: string) { this._confirmPassword = value; });
+// UNUSED: Virtual field for password confirmation
+// userSchema.virtual('confirmPassword')
+//   .get(function(this: IUser) { return this._confirmPassword; })
+//   .set(function(this: IUser, value: string) { this._confirmPassword = value; });
 
 // Hash password before saving
 userSchema.pre('save', async function(this: HydratedDocument<IUser>, next) {

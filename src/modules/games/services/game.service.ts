@@ -1,5 +1,7 @@
 // src/modules/games/services/game.service.ts
-import { Server, Socket } from 'socket.io';
+import { Server } from 'socket.io';
+// UNUSED: Socket is imported but not used
+// import { Socket } from 'socket.io';
 import { Model, Types } from 'mongoose';
 import { GameRoom, IGameRoom, IPlayer, IAnsweredQuestion } from '../models/gameRoom.model';
 import { logger } from '../../../utils/logger';
@@ -17,6 +19,7 @@ interface IGameService {
     answer: any
   ): Promise<{ correct: boolean; score: number }>;
   getGameState(roomCode: string): Promise<IGameRoom | null>;
+  // TODO: Implement cleanup method
   cleanup(): Promise<void>;
 }
 
@@ -28,8 +31,10 @@ type SocketCallback = (response: {
 
 class GameService implements IGameService {
   private io: Server | null = null;
+  // REVIEW: Replace any with proper type for MongoDB ChangeStream
   private changeStream: any = null;
-  private activeRooms = new Map<string, NodeJS.Timeout>();
+  // UNUSED: Property declared but not used
+  // private activeRooms = new Map<string, NodeJS.Timeout>();
   private gameRoomModel: Model<IGameRoom>;
 
   constructor() {
@@ -559,15 +564,20 @@ class GameService implements IGameService {
    * Clean up resources
    */
   public async cleanup(): Promise<void> {
+    // TODO: Implement cleanup logic for resources
+    // This should close any open connections and clean up resources
     if (this.changeStream) {
       await this.changeStream.close();
     }
+    // Add any additional cleanup logic here
+    // For example, you might want to close any open database connections or file handles
+    // You can also use this method to clean up any other resources that were allocated during the game
     this.activeRooms.forEach(clearTimeout);
     this.activeRooms.clear();
   }
 }
 
-// Export a singleton instance
+// ... (rest of the code remains the same)
 const gameService = new GameService();
 
 export { gameService };

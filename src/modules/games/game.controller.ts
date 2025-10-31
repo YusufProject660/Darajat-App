@@ -1,14 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
+
 import { AppError } from '../../utils/appError';
 import { GameRoom, IPlayer, IAnsweredQuestion } from './models/gameRoom.model';
 import { Deck } from './models/deck.model';
 import {gameService} from './services/game.service';
-import User from '../users/user.model';
+// UNUSED: Not used in the  code
+// import User from '../users/user.model';
 import { Question } from './models/question.model';
 import { generateUniqueRoomCode } from './utils/generateRoomCode';
 import { IUser } from '../users/user.model';
 import { logger } from '../../utils/logger';
+
 
 interface IGameRequest extends Request {
   user?: IUser;
@@ -19,6 +22,7 @@ interface IGameRequest extends Request {
   };
   [key: string]: any;
 }
+
 
 interface IRequestWithUser extends Request {
   user?: IUser;
@@ -48,10 +52,10 @@ interface IGameLobbyRequest extends Request {
     // Validate request body
     const { categories = {}, numberOfQuestions = 10, maximumPlayers = 4 } = req.body;
     
-    // Initialize variables that will be used later
-    const questionsToShuffle: any[] = [];
-    let currentQuestionIndex = 0;
-    let gameStatus = 'waiting';
+    // UNUSED: Variables declared but not used
+    // const questionsToShuffle: any[] = [];
+    // let currentQuestionIndex = 0;
+    // let gameStatus = 'waiting';
 
     // Validate categories structure
     if (!categories || typeof categories !== 'object' || Object.keys(categories).length === 0) {
@@ -354,17 +358,17 @@ interface ISubmitAnswerRequest extends Request {
   user?: IUser;
 }
 
-// Player stats interface for leaderboard
-interface PlayerStats {
-  userId: string;
-  username: string;
-  avatar?: string;
-  points: number;
-  accuracy: number;
-  averageTime: number;
-  correctAnswers: number;
-  totalQuestionsAnswered: number;
-}
+// UNUSED: Not used in the visible code
+// interface PlayerStats {
+//   userId: string;
+//   username: string;
+//   avatar?: string;
+//   points: number;
+//   accuracy: number;
+//   averageTime: number;
+//   correctAnswers: number;
+//   totalQuestionsAnswered: number;
+// }
 
 /**
  * @desc    Get all questions for a game room
