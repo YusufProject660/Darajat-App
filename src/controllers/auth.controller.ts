@@ -4,19 +4,21 @@ import jwt from "jsonwebtoken";
 import { JWT_SECRET, JWT_EXPIRES_IN, GOOGLE_CLIENT_ID } from "../config";
 import { sendEmail } from "../config/email";
 // import { OAuth2Client } from "google-auth-library";
-import validator from "validator";
+import * as validator from 'validator';
 
 // const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 
+import { Types } from 'mongoose';
+
 interface IUserPayload {
-  _id: string;
+  _id: Types.ObjectId;
   email: string;
 }
 
 const signToken = (user: IUserPayload) => {
   return jwt.sign(
     { 
-      id: user._id, 
+      id: user._id, // Mongoose uses _id, but we map it to id in the JWT payload
       email: user.email 
     }, 
     JWT_SECRET, {
@@ -67,7 +69,8 @@ const isValidEmail = (email: string): { isValid: boolean; message?: string } => 
   }
   
   // Additional validation using validator
-  if (!validator.isEmail(email)) {
+  // Only pass the email parameter to isEmail
+if (!validator.default.isEmail(email)) {
     return {
       isValid: false,
       message: 'Invalid email format'
@@ -114,7 +117,10 @@ export const register = async (req: Request, res: Response) => {
       role: 'player'
     });
     
-    const token = signToken(user);
+    const token = signToken({
+      _id: user._id,
+      email: user.email
+    });
     
     return res.status(200).json({
       status: 1,
@@ -141,7 +147,10 @@ export const login = async (req: Request, res: Response) => {
         message: 'Invalid email or password'
       });
       
-    const token = signToken(user);
+    const token = signToken({
+      _id: user._id,
+      email: user.email
+    });
     return res.status(200).json({
       status: 1,
       message: 'Login successful',
