@@ -3,12 +3,12 @@ import { Strategy as GoogleStrategy, StrategyOptions, Profile, VerifyCallback } 
 import { randomBytes } from 'crypto';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import { config } from './env';
-import User, { ISerializedUser } from '../modules/users/user.model';
+import User, { IUser } from '../modules/users/user.model';
 
 // Extend Express User type to include our user properties
 declare global {
   namespace Express {
-    interface User extends ISerializedUser {}
+    interface User extends Omit<IUser, 'password' | 'confirmPassword' | '_confirmPassword' | 'resetToken' | 'resetTokenExpires' | 'matchPassword'> {}
   }
 }
 
@@ -82,12 +82,15 @@ passport.use(
             username,
             avatar,
             role: 'player',
+            authProvider: 'google',
+            isOAuthUser: true,
+            hasPassword: false,
             stats: {
               gamesPlayed: 0,
               accuracy: 0,
               bestScore: 0,
-            },
-            password: randomBytes(20).toString('hex'), // Random placeholder password
+            }
+            // No password field for OAuth users
           });
 
           // Generate JWT token

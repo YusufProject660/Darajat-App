@@ -33,11 +33,10 @@ export const errorMiddleware = (err: any, _req: Request, res: Response, _next: N
     error = new AppError(error.message || 'Internal Server Error', 500);
   }
 
-  // Send error response
-  res.status(error.statusCode).json({
-    success: false,
+  // Always return status 200 with status: 0 for errors
+  res.status(200).json({
+    status: 0,
     message: error.message,
-    statusCode: error.statusCode,
     ...(error.details && { details: error.details })
   });
 };

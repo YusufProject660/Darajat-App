@@ -63,10 +63,49 @@ const userSchema = new Schema<IUser>(
       type: String,
       required: [true, 'Please add an email'],
       unique: true,
-      match: [
-        /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
-        'Please add a valid email'
-      ]
+      trim: true,
+      lowercase: true,
+      validate: {
+        validator: function(v: string) {
+          // More restrictive email validation
+          const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+          if (!emailRegex.test(v)) {
+            return false;
+          }
+          
+          const [localPart, domainPart] = v.split('@');
+          
+          // Check local part length (1-64 chars as per RFC 5321)
+          if (localPart.length < 1 || localPart.length > 64) {
+            return false;
+          }
+          
+          // Check domain part length (1-255 chars as per RFC 5321)
+          if (domainPart.length < 1 || domainPart.length > 255) {
+            return false;
+          }
+          
+          // Check for consecutive dots or invalid starting/ending characters
+          if (domainPart.includes('..') || domainPart.startsWith('.') || domainPart.endsWith('.')) {
+            return false;
+          }
+          
+          // Check domain parts
+          const domainParts = domainPart.split('.');
+          if (domainParts.length < 2 || domainParts.some(part => part.length === 0)) {
+            return false;
+          }
+          
+          // Check TLD length (at least 2 chars, max 63)
+          const tld = domainParts[domainParts.length - 1];
+          if (tld.length < 2 || tld.length > 63) {
+            return false;
+          }
+          
+          return true;
+        },
+        message: 'Please enter a valid email address'
+      }
     },
     password: {
       type: String,
@@ -97,7 +136,10 @@ const userSchema = new Schema<IUser>(
     stats: {
       gamesPlayed: { type: Number, default: 0 },
       accuracy: { type: Number, default: 0 },
-      bestScore: { type: Number, default: 0 }
+      bestScore: { type: Number, default: 0 },
+      totalCorrectAnswers: { type: Number, default: 0 },
+      totalQuestionsAnswered: { type: Number, default: 0 },
+      totalTimePlayed: { type: Number, default: 0 }
     },
     role: {
       type: String,

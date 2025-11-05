@@ -5,8 +5,7 @@ import { AppError } from '../../utils/appError';
 import { GameRoom, IPlayer, IAnsweredQuestion } from './models/gameRoom.model';
 import { Deck } from './models/deck.model';
 import {gameService} from './services/game.service';
-// UNUSED: Not used in the  code
-// import User from '../users/user.model';
+import User from '../users/user.model';
 import { Question } from './models/question.model';
 import { generateUniqueRoomCode } from './utils/generateRoomCode';
 import { IUser } from '../users/user.model';
@@ -864,33 +863,76 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
         );
         
         const playerCorrect = playerAnswers.filter((a: any) => a.isCorrect).length;
-        logger.debug(`Updating stats for player ${playerId}: ${playerCorrect} correct out of ${playerAnswers.length}`);
+        const playerAccuracy = playerAnswers.length > 0 
+          ? Math.round((playerCorrect / playerAnswers.length) * 100) 
+          : 0;
+          
+        logger.debug(`Updating stats for player ${playerId}: ${playerCorrect} correct out of ${playerAnswers.length}, accuracy: ${playerAccuracy}%`);
 
-        const update: any = {
-          $inc: { 
-            'stats.gamesPlayed': 1,
-            'stats.totalCorrectAnswers': playerCorrect,
-            'stats.totalQuestionsAnswered': playerAnswers.length,
-            'stats.totalTimePlayed': totalTime
-          },
-          $max: { 'stats.bestScore': player.score || 0 }
+        // First get current user stats to calculate running totals
+        const user = await User.findById(playerId).session(session);
+        if (!user) {
+          logger.warn(`User not found for player ID: ${playerId}`);
+          return null;
+        }
+
+        const currentStats = user.stats || {
+          gamesPlayed: 0,
+          accuracy: 0,
+          bestScore: 0
         };
 
-        // Calculate new average accuracy
-        const user = await User.findById(playerId).session(session);
-        if (user) {
-          const currentTotalCorrect = user.stats?.totalCorrectAnswers || 0;
-          const currentTotalQuestions = user.stats?.totalQuestionsAnswered || 0;
-          const newTotalCorrect = currentTotalCorrect + playerCorrect;
-          const newTotalQuestions = currentTotalQuestions + playerAnswers.length;
-          
-          update.$set = {
-            ...update.$set,
-            'stats.averageAccuracy': newTotalQuestions > 0 
-              ? Math.round((newTotalCorrect / newTotalQuestions) * 100)
-              : 0
-          };
-        }
+        // Calculate the new stats
+        const playerTotalCorrect = playerAnswers.filter((a: any) => a.isCorrect).length;
+        const playerTotalQuestions = playerAnswers.length;
+        const playerTotalTime = playerAnswers.reduce((sum: number, a: any) => sum + (a.timeTaken || 0), 0);
+
+        // Calculate new accuracy and best score
+        const newAccuracy = playerTotalQuestions > 0 
+          ? Math.round((playerTotalCorrect / playerTotalQuestions) * 100) 
+          : 0;
+        const newBestScore = Math.max(currentStats.bestScore || 0, player.score || 0);
+
+        // Calculate new totals
+        const newTotalCorrect = (currentStats.totalCorrectAnswers || 0) + playerTotalCorrect;
+        const newTotalQuestions = (currentStats.totalQuestionsAnswered || 0) + playerTotalQuestions;
+        const newTotalTime = (currentStats.totalTimePlayed || 0) + playerTotalTime;
+
+        // Prepare the update with all stats fields
+        const update = {
+          $inc: { 
+            'stats.gamesPlayed': 1,
+            'stats.totalCorrectAnswers': playerTotalCorrect,
+            'stats.totalQuestionsAnswered': playerTotalQuestions,
+            'stats.totalTimePlayed': playerTotalTime
+          },
+          $set: {
+            'stats.accuracy': newAccuracy,
+            'stats.bestScore': newBestScore
+          }
+        };
+
+        logger.debug(`Updating user ${playerId} stats:`, {
+          oldStats: {
+            accuracy: currentStats.accuracy,
+            bestScore: currentStats.bestScore,
+            totalCorrectAnswers: currentStats.totalCorrectAnswers || 0,
+            totalQuestionsAnswered: currentStats.totalQuestionsAnswered || 0,
+            totalTimePlayed: currentStats.totalTimePlayed || 0
+          },
+          newStats: {
+            accuracy: newAccuracy,
+            bestScore: newBestScore,
+            totalCorrectAnswers: newTotalCorrect,
+            totalQuestionsAnswered: newTotalQuestions,
+            totalTimePlayed: newTotalTime
+          },
+          currentGame: {
+            correct: playerTotalCorrect,
+            questions: playerTotalQuestions,
+            time: playerTotalTime
+          }
+        });
 
         return User.findByIdAndUpdate(playerId, update, { new: true, session });
       } catch (error) {

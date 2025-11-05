@@ -6,6 +6,41 @@ import { register, login, getMe, forgotPassword, resetPassword, changePassword a
 import { AppError } from '../../utils/appError';
 import asyncHandler from '../../middleware/async';
 
+// Password validation utility function
+const validatePassword = (password: string): { isValid: boolean; message: string } => {
+  // Check minimum length
+  if (password.length < 8) {
+    return { isValid: false, message: 'Password must be at least 8 characters long.' };
+  }
+
+  // Check for uppercase letter
+  if (!/[A-Z]/.test(password)) {
+    return { isValid: false, message: 'Password must contain at least one uppercase letter.' };
+  }
+
+  // Check for lowercase letter
+  if (!/[a-z]/.test(password)) {
+    return { isValid: false, message: 'Password must contain at least one lowercase letter.' };
+  }
+
+  // Check for number
+  if (!/\d/.test(password)) {
+    return { isValid: false, message: 'Password must contain at least one number (0-9).' };
+  }
+
+  // Check for special character
+  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>/?]+/.test(password)) {
+    return { isValid: false, message: 'Password must contain at least one special character.' };
+  }
+
+  // Check for whitespace
+  if (/\s/.test(password)) {
+    return { isValid: false, message: 'Password cannot contain whitespace.' };
+  }
+
+  return { isValid: true, message: 'Password is valid.' };
+};
+
 // Helper function to generate JWT token
 const generateToken = (user: IUser): string => {
   return jwt.sign(
@@ -43,44 +78,127 @@ type AuthRequest = Request;
 // @route   POST /api/auth/signup
 // @access  Public
 export const registerUser = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
-  const { email, password, confirmPassword } = req.body;
-
-  // Validate required fields
-  if (!email || !password || !confirmPassword) {
-    return res.apiError('Email, password, and confirmPassword are required.', 'MISSING_FIELDS');
-  }
-
-  // Check if passwords match
-  if (password !== confirmPassword) {
-    return res.apiError('Password and confirm password do not match.', 'PASSWORD_MISMATCH');
-  }
-
-  // Validate email format
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return res.apiError('Please provide a valid email address', 'INVALID_EMAIL');
-  }
-
   try {
-    // Use email as username for now
-    const user = await register(email, email, password, confirmPassword);
-    
-    // Set the token in the response header
-    res.setHeader('Authorization', `Bearer ${user.token}`);
-    
-    return res.apiSuccess({
-      id: user.id,
-      email: user.email,
-      username: user.username,
-      role: user.role,
-      token: user.token
-    }, 'Sign up successful');
-  } catch (error: any) {
-    if (error.message === 'User with this email or username already exists') {
-      return res.apiError('Email already registered.', 'DUPLICATE_EMAIL');
+    const { email, password, confirmPassword } = req.body;
+
+    // Field-wise validation
+    if (!email) {
+      return res.status(200).json({ status: 0, message: 'Please enter your email.' });
     }
-    // Pass other errors to the global error handler
-    return next(error);
+
+    if (!password) {
+      return res.status(200).json({ status: 0, message: 'Please enter your password.' });
+    }
+
+    // Check if password contains only whitespace
+    // Validate password format
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.isValid) {
+      return res.status(200).json({ status: 0, message: passwordValidation.message });
+    }
+
+    if (password.trim().length === 0) {
+      return res.status(200).json({ status: 0, message: 'Password cannot be empty.' });
+    }
+
+    if (!confirmPassword) {
+      return res.status(200).json({ status: 0, message: 'Please enter your confirm password.' });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(200).json({ status: 0, message: 'Passwords do not match.' });
+    }
+
+    // Enhanced email validation with XSS protection
+    const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+    
+    // Additional checks for common XSS patterns and invalid email formats
+    const forbiddenChars = ['<', '>', '"', '\'', '(', ')', '[', ']', ';', ':', '\\', ','];
+    const hasForbiddenChars = forbiddenChars.some(char => email.includes(char));
+    const parts = email.split('@');
+    
+    if (hasForbiddenChars || 
+        !emailRegex.test(email) || 
+        parts.length !== 2 || 
+        parts[0].length > 64 || 
+        parts[1].length > 255 ||
+        email.split('@')[1].includes('..') || 
+        email.startsWith('.') || 
+        email.endsWith('.') ||
+        email.includes('..') ||
+        !parts[1].includes('.')) {
+      return res.status(200).json({
+        status: 0,
+        message: 'Please provide a valid email address.'
+      });
+    }
+
+    try {
+      // Use email as username for now
+      const user = await register(email, email, password, confirmPassword);
+      
+      // Set the token in the response header
+      res.setHeader('Authorization', `Bearer ${user.token}`);
+      
+      return res.status(200).json({
+        status: 1,
+        message: 'Signup successful.',
+        data: {
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          role: user.role,
+          token: user.token
+        }
+      });
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      
+      // Handle validation errors from Mongoose
+      if (error.name === 'ValidationError') {
+        const messages = [];
+        // Extract all validation error messages
+        for (const field in error.errors) {
+          if (error.errors[field].message) {
+            messages.push(error.errors[field].message);
+          }
+        }
+        
+        return res.status(200).json({
+          status: 0,
+          message: messages.length > 0 ? messages[0] : 'Validation failed. Please check your input.'
+        });
+      }
+      
+      // Handle duplicate key error (e.g., duplicate email)
+      if (error.code === 11000) {
+        return res.status(200).json({
+          status: 0,
+          message: 'This email is already registered. Please use a different email or login.'
+        });
+      }
+      
+      // Handle custom AppError
+      if (error instanceof AppError) {
+        return res.status(200).json({
+          status: 0,
+          message: error.message
+        });
+      }
+      
+      // For any other unhandled errors
+      return res.status(200).json({
+        status: 0,
+        message: 'Something went wrong. Please try again later.'
+      });
+    }
+  } catch (error) {
+    // This is the outer try-catch block's catch
+    console.error('Unexpected error in registerUser:', error);
+    return res.status(200).json({
+      status: 0,
+      message: 'An unexpected error occurred. Please try again.'
+    });
   }
 });
 

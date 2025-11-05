@@ -2,6 +2,7 @@ import { config } from '../../config/env';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
+import { AppError } from '../../utils/appError';
 import User, { IUser } from './user.model';
 import { sendPasswordResetEmail } from '../../config/email';
 
@@ -27,7 +28,7 @@ const generateToken = (user: IUser): string => {
     const userId = user._id?.toString();
     
     if (!userId) {
-      throw new Error('User ID is required');
+      throw new AppError('User ID is required', 400);
     }
 
     const payload = {
@@ -55,7 +56,7 @@ const generateToken = (user: IUser): string => {
     return token;
   } catch (error) {
     console.error('Error generating token:', error);
-    throw new Error('Failed to generate authentication token');
+    throw new AppError('Failed to generate authentication token', 500);
   }
 };
 
@@ -75,18 +76,27 @@ const formatUserResponse = (user: IUser, token: string): AuthResponse => ({
 
 export const register = async (username: string, email: string, password: string, confirmPassword?: string): Promise<AuthResponse> => {
   // Check if user exists
-  const userExists = await User.findOne({ $or: [{ email }, { username }] });
-  if (userExists) {
-    throw new Error('User with this email or username already exists');
+  const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+  if (existingUser) {
+    if (existingUser.email === email) {
+      throw new AppError('A user with this email already exists', 409);
+    } else {
+      throw new AppError('This username is already taken', 409);
+    }
   }
 
   // Validate password
   if (!password) {
-    throw new Error('Password is required');
+    throw new AppError('Password is required', 400);
+  }
+  
+  // Check for whitespace-only password
+  if (password.trim().length === 0) {
+    throw new AppError('Password cannot be empty', 400);
   }
   
   if (password.length < 6) {
-    throw new Error('Password must be at least 6 characters long');
+    throw new AppError('Password must be at least 6 characters long', 400);
   }
 
   // Create user with plain password - the pre-save hook will handle hashing
@@ -106,7 +116,7 @@ export const register = async (username: string, email: string, password: string
   });
 
   if (!user) {
-    throw new Error('Failed to create user');
+    throw new AppError('Failed to create user', 500);
   }
   
   const token = generateToken(user);
@@ -149,10 +159,10 @@ export const login = async (email: string, password: string): Promise<AuthRespon
       if (trimmedPassword !== password) {
         const isTrimmedMatch = await bcrypt.compare(trimmedPassword, user.password);
         if (!isTrimmedMatch) {
-          throw new Error('Invalid email or password');
+          throw new AppError('Invalid email or password', 401);
         }
       } else {
-        throw new Error('Invalid email or password');
+        throw new AppError('Invalid email or password', 401);
       }
     }
   } catch (error) {
@@ -445,7 +455,7 @@ export const updateProfile = async (userId: string, updateData: { username?: str
   if (updateData.email && updateData.email !== user.email) {
     const emailExists = await User.findOne({ email: updateData.email });
     if (emailExists) {
-      throw new Error('Email already in use');
+      throw new AppError('Email already in use', 409);
     }
   }
 
@@ -453,7 +463,7 @@ export const updateProfile = async (userId: string, updateData: { username?: str
   if (updateData.username && updateData.username !== user.username) {
     const usernameExists = await User.findOne({ username: updateData.username });
     if (usernameExists) {
-      throw new Error('Username already taken');
+      throw new AppError('Username already taken', 409);
     }
   }
 
@@ -493,7 +503,7 @@ export const deleteUser = async (userId: string): Promise<{ success: boolean; me
     };
   } catch (error) {
     console.error('Error deleting user account:', error);
-    throw new Error('Failed to delete account. Please try again later.');
+    throw new AppError('Failed to delete account. Please try again later.', 500);
   }
 };
 

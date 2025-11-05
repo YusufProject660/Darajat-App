@@ -21,7 +21,15 @@ import { authorize } from '../../middlewares/role.middleware';
 const router = Router();
 
 // Public routes
-router.post('/signup', registerUser);
+router.all('/signup', (req, res, next) => {
+  if (req.method !== 'POST') {
+    return res.status(200).json({
+      status: 0,
+      message: 'Invalid request method. Use POST.'
+    });
+  }
+  return registerUser(req, res, next);
+});
 router.post('/login', loginUser);
 router.post('/forgot-password', requestPasswordReset);
 router.post('/reset-password', resetPasswordHandler);
