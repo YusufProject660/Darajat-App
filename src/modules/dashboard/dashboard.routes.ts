@@ -9,6 +9,13 @@ const router = Router();
  * @desc    Get dashboard data (banner, games, actions)
  * @access  Private (JWT required)
  */
-router.get('/', protect, getDashboardData);
+router.route('/')
+  .get(protect, getDashboardData)
+  .all((_req, res) => {
+    res.status(405).json({
+      status: 0,
+      message: 'Method not allowed. Use GET for this endpoint.'
+    });
+  });
 
 export default router;

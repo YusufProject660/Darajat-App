@@ -47,18 +47,15 @@ export const responseFormatter = (_req: any, res: Response, next: NextFunction) 
    * @param errorCode Optional error code (default: 'INTERNAL_ERROR')
    * @param details Optional additional error details
    */
-  res.apiError = function(message: string, errorCode: string = 'INTERNAL_ERROR', details?: any) {
-    // Log the error for server-side debugging
-    console.error('API Error:', { message, code: errorCode, details });
+  res.apiError = function(message: string, _errorCode: string = 'INTERNAL_ERROR', details?: any) {
+    // Log the error for server-side debugging (still log the error code for server logs)
+    console.error('API Error:', { message, code: _errorCode, details });
 
-    // Return error response with status 0 and message
+    // Return simplified error response with status 0 and message only
     return this.status(200).json({
       status: 0, // 0 indicates failure
       message,
-      error: {
-        code: errorCode,
-        details: details || undefined // Only include details if provided
-      }
+      ...(details && { details }) // Only include details if provided
     });
   };
 

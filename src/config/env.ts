@@ -8,6 +8,7 @@ export const config = {
   mongoURI: process.env.MONGO_URI || 'mongodb://localhost:27017/darajat',
   jwtSecret: process.env.JWT_SECRET || 'your_jwt_secret',
   nodeEnv: process.env.NODE_ENV || 'development',
+  backendUrl: process.env.BACKEND_URL || 'http://localhost:5000',
   clientUrl: process.env.CLIENT_URL || 'http://localhost:3000',
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID || '',

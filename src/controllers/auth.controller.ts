@@ -18,7 +18,7 @@ interface IUserPayload {
 const signToken = (user: IUserPayload) => {
   return jwt.sign(
     { 
-      id: user._id, // Mongoose uses _id, but we map it to id in the JWT payload
+      user_id: user._id, // Changed from id to user_id
       email: user.email 
     }, 
     JWT_SECRET, {
@@ -69,7 +69,7 @@ const isValidEmail = (email: string): { isValid: boolean; message?: string } => 
   }
   
   // Additional validation using validator
-  // Only pass the email parameter to isEmail
+ 
 if (!validator.default.isEmail(email)) {
     return {
       isValid: false,
@@ -90,6 +90,14 @@ export const register = async (req: Request, res: Response) => {
       return res.status(200).json({
         status: 0,
         message: emailValidation.message || 'Please provide a valid email address'
+      });
+    }
+    
+    // Check password length
+    if (password && password.length > 20) {
+      return res.status(200).json({
+        status: 0,
+        message: 'Password must be less than or equal to 20 characters.'
       });
     }
     
@@ -122,10 +130,16 @@ export const register = async (req: Request, res: Response) => {
       email: user.email
     });
     
+    const { _id, ...userData } = user.toObject();
     return res.status(200).json({
       status: 1,
       message: 'Signup successful',
-      data: { token, user }
+      data: { 
+        user_id: _id,
+        email: user.email,
+        role: user.role,
+        token
+      }
     });
     
   } catch (error: any) {
@@ -151,10 +165,17 @@ export const login = async (req: Request, res: Response) => {
       _id: user._id,
       email: user.email
     });
+    const { _id, ...userData } = user.toObject();
     return res.status(200).json({
       status: 1,
       message: 'Login successful',
-      data: { token, user }
+      data: { 
+        token, 
+        user: {
+          user_id: _id,
+          ...userData
+        }
+      }
     });
   } catch (error: any) {
     console.error('Login error:', error);

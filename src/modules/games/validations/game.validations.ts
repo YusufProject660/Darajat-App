@@ -3,14 +3,15 @@ import { body, validationResult, ValidationChain } from 'express-validator';
 import { AppError } from '../../../utils/appError';
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
-const CATEGORIES = ['Sawm',' Salah','Prophets','Fiqh'] as const;
+const CATEGORIES = ['sawm', 'salah', 'prophets', 'fiqh'] as const;
 
 type Difficulty = typeof DIFFICULTIES[number];
 type Category = typeof CATEGORIES[number];
 
 interface CategoryConfig {
   enabled: boolean;
-  difficulty?: Difficulty;
+  difficulty: Difficulty;
+  name: string;
 }
 
 // Create validation chains
@@ -22,11 +23,14 @@ const createGameValidations: ValidationChain[] = [
       console.log('Raw request body:', JSON.stringify(body, null, 2));
       console.log('Request headers:', req.headers);
       
-      // Check if body has categories or Categories (case insensitive)
+      // Check if body has categories (case insensitive)
       const categories = body.categories || body.Categories;
       if (!categories) {
         throw new Error('Categories are required in the request body');
       }
+      
+      // Log the raw categories for debugging
+      console.log('Raw categories from request:', JSON.stringify(categories, null, 2));
       
       // Ensure categories is an object
       if (typeof categories !== 'object' || Array.isArray(categories)) {
@@ -42,10 +46,11 @@ const createGameValidations: ValidationChain[] = [
       };
 
       // Check for at least one enabled category
-      const hasEnabledCategory = Object.values(categories as Record<string, RawCategoryConfig>).some(config => {
+      const hasEnabledCategory = Object.entries(categories as Record<string, RawCategoryConfig>).some(([category, config]) => {
         if (!config || typeof config !== 'object') return false;
         const enabled = config.enabled ?? config.Enabled;
-        return enabled === true || enabled === 'true';
+        const categoryLower = category.toLowerCase();
+        return (enabled === true || enabled === 'true') && CATEGORIES.includes(categoryLower as Category);
       });
       
       if (!hasEnabledCategory) {
@@ -58,15 +63,21 @@ const createGameValidations: ValidationChain[] = [
       for (const [category, config] of Object.entries(categories as Record<string, RawCategoryConfig>)) {
         if (config && typeof config === 'object') {
           const enabled = !!config.enabled || config.Enabled === true || config.Enabled === 'true';
-          const difficulty = (config.difficulty || config.Difficulty || 'medium')
-            .toString()
-            .toLowerCase() as Difficulty;
+          const difficulty = (config.difficulty || config.Difficulty || '').toString().toLowerCase();
+          
+          const categoryLower = category.toLowerCase();
+          if (CATEGORIES.includes(categoryLower as Category)) {
+            if (enabled) {
+              if (!DIFFICULTIES.includes(difficulty as Difficulty)) {
+                throw new Error(`Invalid difficulty '${difficulty}' for category '${category}'. Must be one of: ${DIFFICULTIES.join(', ')}`);
+              }
             
-          if (CATEGORIES.includes(category as Category)) {
-            sanitizedCategories[category] = {
-              enabled,
-              difficulty: DIFFICULTIES.includes(difficulty) ? difficulty : 'medium'
-            };
+              sanitizedCategories[categoryLower] = {
+                enabled,
+                difficulty: difficulty as Difficulty,
+                name: categoryLower
+              };
+            }
           }
         }
       }
@@ -77,16 +88,47 @@ const createGameValidations: ValidationChain[] = [
       return true;
     }),
   
-  body('numberOfQuestions')
-    .exists().withMessage('Number of questions is required')
-    .isInt({ min: 1, max: 10 }).withMessage('Number of questions must be between 1 and 10')
-    .toInt(),
-    
-  body('maximumPlayers')
-    .optional()
-    .isInt({ min: 2, max: 10 }).withMessage('Maximum players must be between 2 and 10')
-    .default(4)
-    .toInt()
+  // Add a pre-validation step to normalize field names
+  body()
+    .custom((body, { req }) => {
+      console.log('Raw request body in validation:', JSON.stringify(body, null, 2));
+      
+      // Normalize field names to camelCase
+      if (body.number_of_questions !== undefined) {
+        body.numberOfQuestions = body.number_of_questions;
+      }
+      if (body.maximum_players !== undefined) {
+        body.maximumPlayers = body.maximum_players;
+      }
+      
+      // Ensure we have the required fields after normalization
+      if (body.numberOfQuestions === undefined) {
+        console.log('Number of questions is missing. Available fields:', Object.keys(body));
+        throw new Error('Number of questions is required');
+      }
+      
+      // Convert to numbers and validate
+      const numQuestions = parseInt(body.numberOfQuestions, 10);
+      if (isNaN(numQuestions) || numQuestions < 1 || numQuestions > 60) {
+        throw new Error('Number of questions must be between 1 and 60');
+      }
+      
+      // Set default for maximumPlayers if not provided
+      if (body.maximumPlayers === undefined) {
+        body.maximumPlayers = 4;
+      }
+      
+      const maxPlayers = parseInt(body.maximumPlayers, 10);
+      if (isNaN(maxPlayers) || maxPlayers < 2 || maxPlayers > 10) {
+        throw new Error('Maximum players must be between 2 and 10');
+      }
+      
+      // Update the request body with normalized values
+      req.body.numberOfQuestions = numQuestions;
+      req.body.maximumPlayers = maxPlayers;
+      
+      return true;
+    })
 ];
 
 // Enhanced error handling middleware

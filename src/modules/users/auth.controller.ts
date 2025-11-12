@@ -1,8 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import path from 'path';
+import fs from 'fs/promises';
+import fsSync from 'fs';
+import { sendEmail } from "../../services/email.service";
 import { config } from '../../config/env';
 import { IUser } from './user.model'; // Make sure this path is correct
 import { register, login, getMe, forgotPassword, resetPassword, changePassword as changePasswordService, updateProfile, deleteUser } from './auth.service';
+import { addToBlacklist } from '../../utils/tokenBlacklist';
 import { AppError } from '../../utils/appError';
 import asyncHandler from '../../middleware/async';
 
@@ -109,47 +114,59 @@ export const registerUser = asyncHandler(async (req: AuthRequest, res: Response,
       return res.status(200).json({ status: 0, message: 'Passwords do not match.' });
     }
 
-    // Enhanced email validation with XSS protection
-    const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-    
-    // Additional checks for common XSS patterns and invalid email formats
-    const forbiddenChars = ['<', '>', '"', '\'', '(', ')', '[', ']', ';', ':', '\\', ','];
-    const hasForbiddenChars = forbiddenChars.some(char => email.includes(char));
-    const parts = email.split('@');
-    
-    if (hasForbiddenChars || 
-        !emailRegex.test(email) || 
-        parts.length !== 2 || 
-        parts[0].length > 64 || 
-        parts[1].length > 255 ||
-        email.split('@')[1].includes('..') || 
-        email.startsWith('.') || 
-        email.endsWith('.') ||
-        email.includes('..') ||
-        !parts[1].includes('.')) {
-      return res.status(200).json({
-        status: 0,
-        message: 'Please provide a valid email address.'
-      });
-    }
+    // Strict email validation
+const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
+// Additional checks for invalid email patterns
+if (!email || 
+    !emailRegex.test(email) || 
+    email.includes('..') || 
+    /@\.|\.@|\.{2,}/.test(email) ||
+    /\s/.test(email) ||
+    /[\s<>\[\],;:\\"]/.test(email) ||
+    /@.*@/.test(email) || // More than one @
+    /^[^@]+\.[^@]+\.[^@]+$/.test(email.split('@')[1]) || // More than one dot after @
+    email.split('@')[0].length > 64 ||
+    email.split('@')[1].length > 255) {
+  return res.status(200).json({
+    status: 0,
+    message: 'Invalid email format.'
+  });
+}
+
+// Additional check for double TLDs like .com.com, .net.net, etc.
+const domainPart = email.split('@')[1];
+const domainParts = domainPart.split('.');
+if (domainParts.length > 2) {
+  const tld = domainParts[domainParts.length - 1];
+  const secondLevel = domainParts[domainParts.length - 2];
+  if (secondLevel === tld) {
+    return res.status(200).json({
+      status: 0,
+      message: 'Invalid email format.'
+    });
+  }
+}
 
     try {
-      // Use email as username for now
-      const user = await register(email, email, password, confirmPassword);
+      const { fullname, username } = req.body;
+      const user = await register(email, password, confirmPassword, username, fullname);
       
       // Set the token in the response header
       res.setHeader('Authorization', `Bearer ${user.token}`);
       
+      // Prepare response data
+      const responseData = {
+        user_id: user.id,
+        email: user.email,
+        role: user.role,
+        token: user.token
+      };
+      
       return res.status(200).json({
         status: 1,
         message: 'Signup successful.',
-        data: {
-          id: user.id,
-          email: user.email,
-          username: user.username,
-          role: user.role,
-          token: user.token
-        }
+        data: responseData
       });
     } catch (error: any) {
       console.error('Registration error:', error);
@@ -206,17 +223,48 @@ export const registerUser = asyncHandler(async (req: AuthRequest, res: Response,
 // @route   POST /api/auth/login
 // @access  Public
 export const loginUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const { email, password } = req.body;
+  // Trim and validate input fields
+  const email = req.body.email?.trim();
+  const password = req.body.password?.trim();
 
-  // Input validation
-  if (!email || !password) {
-    return res.apiError('Please provide both email and password', 'MISSING_CREDENTIALS');
+  // Validate required fields
+  if (!email && !password) {
+    return res.status(200).json({ 
+      status: 0, 
+      message: 'Email and password are required.' 
+    });
+  }
+  if (!email) {
+    return res.status(200).json({ 
+      status: 0, 
+      message: 'Please enter your email address.' 
+    });
+  }
+  if (!password) {
+    return res.status(200).json({ 
+      status: 0, 
+      message: 'Please enter your password.' 
+    });
   }
 
-  // Email format validation
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return res.apiError('Please provide a valid email address', 'INVALID_EMAIL_FORMAT');
+  // Validate email format with comprehensive checks
+  const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+  if (
+    !emailRegex.test(email) ||
+    email.includes('..') ||
+    /@\.|\.@|\.{2,}/.test(email) ||
+    /\s/.test(email) ||
+    /[\s<>\[\],;:\\"]/.test(email) ||
+    /@.*@/.test(email) ||
+    /^[^@]+\.[^@]+\.[^@]+$/.test(email.split('@')[1]) ||
+    email.split('@')[0].length > 64 ||
+    email.split('@')[1].length > 255 ||
+    /\.[A-Za-z]+\.(com|net|org|in)$/i.test(email.split('@')[1])
+  ) {
+    return res.status(200).json({
+      status: 0,
+      message: 'Invalid email format.'
+    });
   }
 
   try {
@@ -235,16 +283,18 @@ export const loginUser = asyncHandler(async (req: Request, res: Response, next: 
 
     // Return user data and token using response formatter
     return res.apiSuccess({
-      id: user.id,
+      user_id: user.id,
       email: user.email,
-      username: user.username,
       role: user.role,
       token
     }, 'Login successful');
   } catch (error: any) {
     // Handle specific error cases from auth service
-    if (error.code === 'INVALID_CREDENTIALS') {
-      return res.apiError('Invalid email or password', 'INVALID_CREDENTIALS');
+    if (error.code === 'INVALID_CREDENTIALS' || error.code === 'USER_NOT_FOUND') {
+      return res.status(200).json({
+        status: 0,
+        message: 'Invalid email or password.'
+      });
     }
     
     if (error.code === 'OAUTH_ACCOUNT') {
@@ -273,26 +323,53 @@ export const getMeHandler = asyncHandler(async (req: AuthRequest, res: Response,
     return next(new AppError('User not found', 404));
   }
   
+  // Format the response to match the required structure
   return res.status(200).json({
-    success: true,
-    data: user
+    status: 1,
+    message: 'User profile fetched successfully',
+    data: {
+      userId: user.id,
+        
+      email: user.email,
+      token: user.token,
+
+    }
   });
 });
-
-// @desc    Logout user / clear cookie
-// @route   GET /api/auth/logout
+// @desc    Logout user / clear token
+// @route   POST /api/auth/logout
 // @access  Private
-export const logoutUser = asyncHandler(async (_req: Request, res: Response) => {
-  res.cookie('token', 'none', {
-    expires: new Date(Date.now() + 10 * 1000), // 10 seconds
-    httpOnly: true,
-  });
+export const logoutUser = async (req: Request, res: Response) => {
+  try {
+    // Get token from header
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(200).json({
+        status: 0,
+        message: 'No token provided'
+      });
+    }
 
-  res.status(200).json({
-    success: true,
-    data: {}
-  });
-});
+    const token = authHeader.split(' ')[1];
+    
+    // Add the token to the blacklist
+    addToBlacklist(token);
+
+    // Clear the JWT token cookie if you're using cookies
+    res.clearCookie('jwt');
+
+    return res.status(200).json({
+      status: 1,
+      message: 'User logged out successfully'
+    });
+  } catch (error) {
+    return res.status(200).json({
+      status: 0,
+      message: 'Logout failed'
+    });
+  }
+};
 
 // @desc    Check if user is admin
 // @route   GET /api/auth/admin
@@ -373,54 +450,429 @@ export const googleAuthFailure = (_req: Request, res: Response) => {
 // @access  Public
 export const requestPasswordReset = asyncHandler(async (req: Request, res: Response) => {
   const { email } = req.body;
-
-  // Validate email
+  
+  // Validate email presence
   if (!email) {
     return res.status(200).json({
       status: 0,
-      message: 'Email is required'
+      message: 'Email is required.'
+    });
+  }
+
+  // Normalize the email by trimming whitespace
+  const normalizedEmail = email.trim();
+
+  // If email is empty after trimming
+  if (!normalizedEmail) {
+    return res.status(200).json({
+      status: 0,
+      message: 'Email is required.'
+    });
+  }
+
+  // Enhanced email format validation
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,}$/;
+  if (!emailRegex.test(normalizedEmail) || normalizedEmail.includes('..') || 
+      normalizedEmail.endsWith('.') || normalizedEmail.includes('.@') ||
+      (normalizedEmail.split('@')[1].match(/\./g) || []).length > 1) {
+    return res.status(200).json({
+      status: 0,
+      message: 'Invalid email format.'
     });
   }
 
   try {
-    // Call the forgot password service
-    const result = await forgotPassword(email);
+    console.log('🔑 [1/3] Starting password reset request for email:', normalizedEmail);
     
-    // Return the result from the service
+    // Call the forgot password service
+    console.log('🔑 [2/3] Calling forgotPassword service...');
+    const result = await forgotPassword(normalizedEmail);
+    
+    // Check the result status
+    if (result.status === 0) {
+      console.log('⚠️ [3/3] Password reset request failed:', {
+        code: result.code,
+        message: result.message,
+        remainingTime: result.remainingTime
+      });
+      
+      // Handle cooldown response
+      if (result.code === 'RESET_COOLDOWN') {
+        return res.status(200).json({
+          status: 0,
+          message: result.message,
+          remainingTime: result.remainingTime,
+          code: 'RESET_COOLDOWN'
+        });
+      }
+      
+      // Handle user not found or other errors
+      return res.status(200).json({
+        status: 0,
+        message: result.message || 'No account found with this email address.',
+        code: result.code || 'UNKNOWN_ERROR'
+      });
+    }
+    
+    console.log('✅ [3/3] Password reset email sent successfully');
+    
+    // Return success response
     return res.status(200).json({
-      status: result.status,
-      message: result.message
+      status: 1,
+      message: 'If an account with this email exists, you will receive a password reset link.',
+      code: 'EMAIL_SENT'
     });
+    
   } catch (error) {
-    console.error('Error in password reset request:', error);
-    return res.status(200).json({
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    
+    console.error('❌ [ERROR] Failed to process password reset request:', {
+      error: errorMessage,
+      stack: errorStack,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Return a generic error message to the client
+    return res.status(500).json({
       status: 0,
-      message: 'An error occurred while processing your request.'
+      message: 'An error occurred while processing your request. Please try again later.',
+      code: 'INTERNAL_SERVER_ERROR'
     });
   }
 });
 
 // @desc    Reset Password
 // @route   POST /api/auth/reset-password
+// @access Public
+// @desc    Reset Password Page
+// @route   GET /api/auth/reset-password
 // @access  Public
-export const resetPasswordHandler = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const { token, newPassword } = req.body;
+export const resetPasswordPage = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { token } = req.query;
+        
+        if (!token) {
+            return res.status(400).send('Invalid or missing reset token');
+        }
 
-  if (!token || !newPassword) {
-    return next(new AppError('Token and new password are required', 400));
+        // Create public directory if it doesn't exist
+        const publicDir = path.join(__dirname, '../../../public');
+        if (!fsSync.existsSync(publicDir)) {
+            console.log(`Creating public directory at: ${publicDir}`);
+            await fs.mkdir(publicDir, { recursive: true });
+        }
+
+        const filePath = path.join(publicDir, 'reset-password.html');
+        console.log(`Looking for reset password HTML at: ${filePath}`);
+        
+        // Check if file exists, if not create it
+        if (!fsSync.existsSync(filePath)) {
+            console.log('Reset password HTML not found, creating new one...');
+            await fs.writeFile(filePath, getResetPasswordHTML(), 'utf-8');
+        }
+
+        let html = await fs.readFile(filePath, 'utf-8');
+        
+        // Inject the token into the HTML
+        html = html.replace(
+            'id="token" value=""', 
+            `id="token" value="${token}"`
+        );
+        
+        // Set content type to HTML
+        res.setHeader('Content-Type', 'text/html');
+        res.send(html);
+    } catch (error) {
+        console.error('Error serving reset password page:', error);
+        res.status(500).send('An error occurred while loading the reset password page');
+    }
+};
+
+// @desc    Reset Password
+// @route   POST /api/auth/reset-password
+// @access  Public
+export const resetPasswordHandler = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    let { token, password, confirmPassword } = req.body;
+
+    // Trim whitespace from inputs
+    token = token?.trim();
+    password = password?.trim();
+    confirmPassword = confirmPassword?.trim();
+
+    // Validate token
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token is required'
+      });
+    }
+
+    // Validate passwords
+    if (!password || !confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both password and confirm password are required'
+      });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Passwords do not match'
+      });
+    }
+
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        message: passwordValidation.message
+      });
+    }
+
+    const result = await resetPassword(token, password);
+    
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: result.message || 'Password has been reset successfully'
+    });
+  } catch (error) {
+    console.error('Error in resetPasswordHandler:', error);
+    res.status(500).json({
+      success: false,
+      message: 'An error occurred while resetting your password'
+    });
   }
+};
 
-  const result = await resetPassword(token, newPassword);
-  
-  if (!result.success) {
-    return next(new AppError(result.message, 400));
-  }
+// Helper function to generate the reset password HTML
+const getResetPasswordHTML = () => {
+    return `<!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Reset Password - Darajat</title>
+        <style>
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                line-height: 1.6;
+                margin: 0;
+                padding: 20px;
+                background-color: #f5f7fa;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+            }
+            .container {
+                background: white;
+                padding: 2rem;
+                border-radius: 8px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                max-width: 400px;
+                width: 100%;
+            }
+            h2 {
+                color: #2d3748;
+                margin-top: 0;
+                text-align: center;
+            }
+            .form-group {
+                margin-bottom: 1.5rem;
+            }
+            label {
+                display: block;
+                margin-bottom: 0.5rem;
+                color: #4a5568;
+                font-weight: 500;
+            }
+            input[type="password"] {
+                width: 100%;
+                padding: 0.75rem;
+                border: 1px solid #e2e8f0;
+                border-radius: 4px;
+                font-size: 1rem;
+                transition: border-color 0.2s;
+            }
+            input[type="password"]:focus {
+                outline: none;
+                border-color: #4299e1;
+                box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.2);
+            }
+            button {
+                width: 100%;
+                background-color: #4299e1;
+                color: white;
+                border: none;
+                padding: 0.75rem;
+                border-radius: 4px;
+                font-size: 1rem;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background-color 0.2s;
+            }
+            button:hover {
+                background-color: #3182ce;
+            }
+            .error-message {
+                color: #e53e3e;
+                margin-top: 0.5rem;
+                font-size: 0.875rem;
+            }
+            .success-message {
+                color: #38a169;
+                margin-top: 0.5rem;
+                font-size: 0.875rem;
+            }
+            .password-requirements {
+                font-size: 0.75rem;
+                color: #718096;
+                margin-top: 0.25rem;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2>Reset Your Password</h2>
+            <div id="error-message" class="error-message"></div>
+            <div id="success-message" class="success-message"></div>
+            <form id="resetForm">
+                <input type="hidden" id="token" name="token" value="" />
+                
+                <div class="form-group">
+                    <label for="password">New Password</label>
+                    <input 
+                        type="password" 
+                        id="password" 
+                        name="password" 
+                        placeholder="Enter your new password" 
+                        required 
+                        minlength="8"
+                        pattern="^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$"
+                    />
+                    <div class="password-requirements">
+                        Must be at least 8 characters long and include uppercase, lowercase, number, and special character.
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="confirmPassword">Confirm New Password</label>
+                    <input 
+                        type="password" 
+                        id="confirmPassword" 
+                        name="confirmPassword" 
+                        placeholder="Confirm your new password" 
+                        required
+                    />
+                </div>
+                
+                <button type="submit" id="submitBtn">Reset Password</button>
+            </form>
+        </div>
 
-  res.status(200).json({
-    success: true,
-    message: result.message
-  });
-});
+        <script>
+            // Extract token from URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
+            
+            if (token) {
+                document.getElementById('token').value = token;
+            } else {
+                document.getElementById('error-message').textContent = 'Invalid or missing reset token';
+                document.getElementById('resetForm').style.display = 'none';
+            }
+
+            document.getElementById('resetForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const password = document.getElementById('password').value;
+                const confirmPassword = document.getElementById('confirmPassword').value;
+                const errorMessage = document.getElementById('error-message');
+                const successMessage = document.getElementById('success-message');
+                const submitBtn = document.getElementById('submitBtn');
+                
+                // Clear previous messages
+                errorMessage.textContent = '';
+                successMessage.textContent = '';
+                
+                // Validate passwords match
+                if (password !== confirmPassword) {
+                    errorMessage.textContent = 'Passwords do not match';
+                    return;
+                }
+                
+                // Validate password strength
+                const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$/;
+                if (!passwordRegex.test(password)) {
+                    errorMessage.textContent = 'Password must be at least 8 characters long and include uppercase, lowercase, number, and special character.';
+                    return;
+                }
+                
+                try {
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = 'Processing...';
+                    
+                    const response = await fetch('/api/auth/reset-password', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            token: document.getElementById('token').value,
+                            password: password,
+                            confirmPassword: confirmPassword
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(data.message || 'Failed to reset password');
+                    }
+                    
+                    successMessage.textContent = data.message || 'Password has been reset successfully!';
+                    this.reset();
+                    
+                    // Redirect to login after 3 seconds
+                    setTimeout(() => {
+                        window.location.href = '/login';
+                    }, 3000);
+                    
+                } catch (error) {
+                    console.error('Error:', error);
+                    errorMessage.textContent = error.message || 'An error occurred while resetting your password. Please try again.';
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Reset Password';
+                }
+            });
+            
+            // Real-time password matching
+            document.getElementById('confirmPassword').addEventListener('input', function() {
+                const password = document.getElementById('password').value;
+                const confirmPassword = this.value;
+                const errorMessage = document.getElementById('error-message');
+                
+                if (confirmPassword && password !== confirmPassword) {
+                    errorMessage.textContent = 'Passwords do not match';
+                } else if (errorMessage.textContent === 'Passwords do not match') {
+                    errorMessage.textContent = '';
+                }
+            });
+        </script>
+    </body>
+    </html>`;
+};
 
 // @desc    Change user password
 // @route   POST /api/auth/change-password
@@ -429,21 +881,23 @@ export const resetPasswordHandler = asyncHandler(async (req: Request, res: Respo
 // @route   PATCH /api/user/profile
 // @access  Private
 export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
-  const { username, email, avatar } = req.body;
+  const { firstName, lastName, email } = req.body;
   
   // Validate request body
-  if (!username && !email && !avatar) {
-    return next(new AppError('At least one field (username, email, or avatar) is required to update profile', 400));
+  if (!firstName && !lastName && !email) {
+    return next(new AppError('At least one field (firstName, lastName, or email) is required to update profile', 400));
   }
 
   try {
-    const updatedUser = await updateProfile(req.user!.id, { username, email, avatar });
+    const updatedUser = await updateProfile(req.user!.id, { firstName, lastName, email });
     
     return res.apiSuccess({
       userId: updatedUser.id,
       username: updatedUser.username,
       email: updatedUser.email,
-      avatar: updatedUser.avatar
+      firstName: updatedUser.firstName,
+      lastName: updatedUser.lastName,
+      token: updatedUser.token
     }, 'Profile updated successfully');
   } catch (error: any) {
     if (error.message === 'Email already in use' || error.message === 'Username already taken') {
@@ -500,25 +954,80 @@ export const deleteUserAccount = asyncHandler(async (req: AuthRequest, res: Resp
 // @route   PATCH /api/auth/change-password
 // @access  Private
 export const changePassword = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
-  const { currentPassword, newPassword } = req.body;
+  // Trim all input fields
+  const currentPassword = req.body.currentPassword?.trim() || '';
+  const newPassword = req.body.newPassword?.trim() || '';
+  const confirmNewPassword = req.body.confirmNewPassword?.trim() || '';
   const userId = req.user?._id;
 
   if (!userId) {
     return next(new AppError('User not authenticated', 401));
   }
 
-  if (!currentPassword || !newPassword) {
-    return next(new AppError('Current password and new password are required', 400));
+  // Check if all fields are empty after trimming
+  if (!currentPassword && !newPassword && !confirmNewPassword) {
+    return res.status(200).json({
+      status: 0,
+      message: 'CurrentPassword, newPassword and confirmNewPassword are required'
+    });
+  }
+
+  // Check individual required fields after trimming
+  if (!currentPassword) {
+    return res.status(200).json({
+      status: 0,
+      message: 'Please enter currentPassword'
+    });
+  }
+
+  if (!newPassword) {
+    return res.status(200).json({
+      status: 0,
+      message: 'Please enter newPassword'
+    });
+  }
+
+  if (!confirmNewPassword) {
+    return res.status(200).json({
+      status: 0,
+      message: 'Please enter confirmNewPassword'
+    });
+  }
+
+  // Validate new password length
+  if (newPassword.length < 8) {
+    return res.status(200).json({
+      status: 0,
+      message: 'newPassword must be at least 8 characters long'
+    });
+  }
+
+  if (newPassword.length > 20) {
+    return res.status(200).json({
+      status: 0,
+      message: 'Password must not exceed 20 characters'
+    });
+  }
+
+  // Check if new passwords match after trimming
+  if (newPassword !== confirmNewPassword) {
+    return res.status(200).json({
+      status: 0,
+      message: 'NewPassword and confirmPassword do not match.'
+    });
   }
 
   const result = await changePasswordService(userId.toString(), currentPassword, newPassword);
 
   if (!result.success) {
-    return next(new AppError(result.message, 400));
+    return res.status(200).json({
+      status: 0,
+      message: result.message
+    });
   }
 
   res.status(200).json({
-    success: true,
+    status: 1,
     message: result.message
   });
 });

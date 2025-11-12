@@ -4,13 +4,15 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { AppError } from '../../utils/appError';
 import User, { IUser } from './user.model';
-import { sendPasswordResetEmail } from '../../config/email';
+import { sendPasswordResetEmail } from '../../services/email.service';
 
 const SALT_ROUNDS = 10;
 
 interface AuthResponse {
   id: string;
   username: string;
+  firstName: string;
+  lastName?: string;
   email: string;
   avatar?: string;
   role: 'player' | 'admin';
@@ -63,8 +65,9 @@ const generateToken = (user: IUser): string => {
 const formatUserResponse = (user: IUser, token: string): AuthResponse => ({
   id: user._id.toString(),
   username: user.username,
+  firstName: user.firstName,
+  lastName: user.lastName,
   email: user.email,
-  avatar: user.avatar,
   role: user.role,
   stats: {
     gamesPlayed: user.stats.gamesPlayed,
@@ -74,16 +77,41 @@ const formatUserResponse = (user: IUser, token: string): AuthResponse => ({
   token
 });
 
-export const register = async (username: string, email: string, password: string, confirmPassword?: string): Promise<AuthResponse> => {
+export const register = async (email: string, password: string, confirmPassword?: string, username?: string, fullname?: string): Promise<AuthResponse> => {
   // Check if user exists
-  const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+  const existingUser = await User.findOne({ email });
   if (existingUser) {
-    if (existingUser.email === email) {
-      throw new AppError('A user with this email already exists', 409);
-    } else {
+    throw new AppError('A user with this email already exists', 409);
+  }
+  
+  // Generate username from email if not provided
+  let generatedUsername = username;
+  if (!generatedUsername) {
+    generatedUsername = email.split('@')[0].toLowerCase();
+    // Remove any non-alphanumeric characters from the username
+    generatedUsername = generatedUsername.replace(/[^a-z0-9]/g, '');
+    // Ensure username is not empty after cleaning
+    if (!generatedUsername) {
+      generatedUsername = 'user' + Math.random().toString(36).substring(2, 8);
+    }
+    
+    // Check if the generated username is already taken
+    let counter = 1;
+    const originalUsername = generatedUsername;
+    while (await User.findOne({ username: generatedUsername })) {
+      generatedUsername = `${originalUsername}${counter}`;
+      counter++;
+    }
+  } else {
+    // If username is provided, check if it's taken
+    const existingUsername = await User.findOne({ username });
+    if (existingUsername) {
       throw new AppError('This username is already taken', 409);
     }
   }
+  
+  // Set fullname to the generated username if not provided
+  const userFullname = fullname || generatedUsername;
 
   // Validate password
   if (!password) {
@@ -100,9 +128,10 @@ export const register = async (username: string, email: string, password: string
   }
 
   // Create user with plain password - the pre-save hook will handle hashing
-  const user = await User.create({
-    username,
+  const userData: any = {
     email,
+    username: generatedUsername,
+    firstName: userFullname,
     password: password, // Pre-save hook will hash this
     role: 'player',
     authProvider: 'email',
@@ -113,7 +142,9 @@ export const register = async (username: string, email: string, password: string
       accuracy: 0,
       bestScore: 0
     }
-  });
+  };
+  
+  const user = await User.create(userData);
 
   if (!user) {
     throw new AppError('Failed to create user', 500);
@@ -232,136 +263,150 @@ export const googleAuth = async (profile: any): Promise<AuthResponse> => {
   return formatUserResponse(user, token);
 }
 
-export const forgotPassword = async (email: string): Promise<{ status: number; message: string }> => {
-  console.log('\n🔍 Starting password reset process for email:', email);
+interface ForgotPasswordResponse {
+  status: number;
+  message: string;
+  code?: string;
+  remainingTime?: number;
+}
+
+export const forgotPassword = async (email: string): Promise<ForgotPasswordResponse> => {
+  const logPrefix = '🔵 [FORGOT_PASSWORD]';
+  console.log(`${logPrefix} [1/7] Starting password reset for email:`, email);
   
-  try {
-    // 1. Find user by email and explicitly include the password field
-    console.log('🔎 Looking up user in database...');
-    const user = await User.findOne({ email }).select('+password');
-    
-    if (!user) {
-      console.log('ℹ️ No user found with email:', email);
-      return {
-        status: 0,
-        message: 'No account found with this email address.'
-      };
-    }
-    
-    console.log('✅ User found:', {
-      id: user._id,
-      email: user.email,
-      isOAuthUser: user.isOAuthUser,
-      hasPasswordField: !!user.password,
-      authProvider: user.authProvider,
-      createdAt: user.createdAt,
-      passwordStartsWith: user.password ? user.password.substring(0, 10) + '...' : 'no password'
-    });
-    
-    // Log more user details for debugging
-    console.log('ℹ️ User auth details:', {
-      resetTokenExists: !!user.resetToken,
-      resetTokenExpires: user.resetTokenExpires,
-      hasGoogleId: !!user.googleId
-    });
-
-    // Check if this is an OAuth user
-    if (user.isOAuthUser) {
-      console.log('ℹ️ Account uses OAuth:', {
-        email: user.email,
-        authProvider: user.authProvider
-      });
-      
-      return {
-        success: true,
-        message: 'This account uses OAuth for authentication. Please sign in with your OAuth provider.'
-      };
-    }
-    
-    // Check if password is set and is a valid bcrypt hash
-    const hasValidPassword = user.password && 
-      (user.password.startsWith('$2a$') || 
-       user.password.startsWith('$2b$') || 
-       user.password.startsWith('$2y$'));
-       
-    if (!hasValidPassword) {
-      console.log('ℹ️ Account has no valid password set:', {
-        email: user.email,
-        hasPassword: !!user.password
-      });
-      
-      return {
-        success: true,
-        message: 'This account has no password set. Please use the sign-up process to set a password.'
-      };
-    }
-
-    // 2. Generate reset token
-    console.log('🔑 Generating reset token...');
-    const { token, expiresAt } = generateResetToken();
-    
-    // 3. Save the reset token and expiry to the user document
-    console.log('💾 Saving reset token to user document...');
-    user.resetToken = token;
-    user.resetTokenExpires = expiresAt;
-    await user.save({ validateBeforeSave: false });
-    console.log('✅ Reset token saved. Expires at:', expiresAt);
-
-    // 4. Create reset URL
-    const resetUrl = `${config.frontendUrl}/reset-password?token=${token}`;
-    console.log('🔗 Reset URL:', resetUrl);
-
-    // 5. Send email using our email service
-    console.log('📤 Attempting to send password reset email...');
-    try {
-      const emailInfo = await sendPasswordResetEmail(user.email, resetUrl);
-      console.log('✅ Password reset email sent successfully');
-      
-      // If in development and using ethereal, log the preview URL
-      if (process.env.NODE_ENV === 'development' && !process.env.GOOGLE_CLIENT_ID) {
-        const previewUrl = nodemailer.getTestMessageUrl(emailInfo);
-        if (previewUrl) {
-          console.log('📧 Test email preview URL:', previewUrl);
-        }
-      }
-      
-      return {
-        status: 1,
-        message: 'Password reset link sent successfully.'
-      };
-    } catch (error) {
-      console.error('❌ Error sending password reset email:', {
-        error: error.message,
-        stack: error.stack,
-        code: error.code,
-        response: error.response
-      });
-      
-      // If email sending fails, clear the reset token
-      console.log('🔄 Cleaning up reset token due to email sending failure...');
-      user.resetToken = undefined;
-      user.resetTokenExpires = undefined;
-      await user.save({ validateBeforeSave: false });
-      
-      // Still return success to maintain consistency
-      return FORGOT_PASSWORD_RESPONSE;
-    }
-  } catch (error) {
-    console.error('❌ Forgot password error:', {
-      error: error.message,
-      stack: error.stack,
-      code: error.code,
-      response: error.response
+  // Timeout for the entire operation (25 seconds)
+  const operationTimeout = 60000000;
+  let timeoutId: NodeJS.Timeout | null = null;
+  
+  const handleError = (error: any, defaultMessage: string) => {
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error(`${logPrefix} [ERROR] ${err.message}`, {
+      stack: err.stack,
+      timestamp: new Date().toISOString()
     });
     return {
       status: 0,
-      message: 'Failed to process password reset request.'
+      message: defaultMessage,
+      code: 'RESET_ERROR',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     };
+  };
+
+  try {
+    // Set up the operation promise
+    const operationPromise = (async (): Promise<ForgotPasswordResponse> => {
+      try {
+        // 1. Find the user by email with a timeout
+        console.log(`${logPrefix} [2/7] Looking up user with email:`, email);
+        
+        // Race between the user lookup and a timeout
+        const user = await Promise.race([
+          User.findOne({ email })
+            .select('+password +resetToken +resetTokenExpires +isOAuthUser +authProvider')
+            .maxTimeMS(5000) // 5 second timeout for the query
+            .lean(),
+          new Promise<null>((_, reject) => 
+            setTimeout(() => reject(new Error('User lookup timed out after 5s')), 5000)
+          )
+        ]);
+
+        if (!user) {
+          console.log(`${logPrefix} [3/7] No user found with email:`, email);
+          return {
+            status: 0,
+            message: 'If an account with this email exists, you will receive a password reset link.',
+            code: 'USER_NOT_FOUND'
+          };
+        }
+
+        // 2. Check if this is an OAuth user
+        if (user.isOAuthUser) {
+          console.log(`${logPrefix} [4/7] OAuth account detected:`, {
+            email: user.email,
+            provider: user.authProvider
+          });
+          return {
+            status: 0,
+            message: 'This account uses OAuth for authentication. Please sign in with your OAuth provider.',
+            code: 'OAUTH_ACCOUNT'
+          };
+        }
+
+        // 3. Check cooldown period (1 minute between requests)
+        const COOLDOWN_PERIOD = 60 * 1000; // 1 minute
+        const now = new Date();
+        
+        if (user.lastResetRequest) {
+          const timeSinceLastRequest = now.getTime() - new Date(user.lastResetRequest).getTime();
+          if (timeSinceLastRequest < COOLDOWN_PERIOD) {
+            const remainingTime = Math.ceil((COOLDOWN_PERIOD - timeSinceLastRequest) / 1000);
+            console.log(`${logPrefix} [5/7] Reset requested too soon. Please wait ${remainingTime} seconds.`);
+            return {
+              status: 0,
+              message: `Please wait ${remainingTime} seconds before requesting another reset link.`,
+              code: 'RESET_COOLDOWN',
+              remainingTime
+            };
+          }
+        }
+
+        // 4. Generate and save reset token
+        console.log(`${logPrefix} [6/7] Generating reset token...`);
+        const { token, expiresAt } = generateResetToken();
+        
+        await User.updateOne(
+          { _id: user._id },
+          {
+            $set: {
+              resetPasswordToken: token,
+              resetPasswordExpires: expiresAt,
+              lastResetRequest: now
+            }
+          }
+        );
+
+        // 5. Send reset email (don't await this, respond immediately)
+        console.log(`${logPrefix} [7/7] Scheduling password reset email...`);
+        const resetUrl = `${config.backendUrl || 'http://localhost:5000'}/reset-password?token=${token}`;
+        
+        // Don't await the email sending, just start it and respond
+        sendPasswordResetEmail(user.email, resetUrl)
+          .then(() => {
+            console.log(`${logPrefix} [EMAIL_SENT] Password reset email sent to ${user.email}`);
+          })
+          .catch((emailError) => {
+            console.error(`${logPrefix} [EMAIL_ERROR] Failed to send email:`, emailError);
+          });
+
+        return {
+          status: 1,
+          message: 'If an account with this email exists, you will receive a password reset link.'
+        };
+
+      } catch (error) {
+        console.error(`${logPrefix} [ERROR] Error in password reset:`, error);
+        throw error;
+      }
+    })();
+
+    // Race the operation against the timeout
+    const timeoutPromise = new Promise<ForgotPasswordResponse>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error('Password reset operation timed out after 25 seconds'));
+      }, operationTimeout);
+    });
+
+    return await Promise.race([operationPromise, timeoutPromise]);
+
+  } catch (error) {
+    return handleError(error, 'Failed to process password reset request');
   } finally {
-    console.log('🏁 Forgot password process completed for email:', email);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      console.log(`${logPrefix} [COMPLETE] Forgot password process completed for email:`, email);
+    }
   }
 };
-
 /**
  * Change user password
  * @param userId - User ID
@@ -388,7 +433,7 @@ export const changePassword = async (userId: string, currentPassword: string, ne
     // Verify current password using bcrypt
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
-      return { success: false, message: 'The current password you entered is incorrect.' };
+      return { success: false, message: 'The currentPassword you entered is incorrect.' };
     }
 
     // Check if new password is same as current
@@ -397,14 +442,27 @@ export const changePassword = async (userId: string, currentPassword: string, ne
       return { success: false, message: 'New password cannot be the same as the current password.' };
     }
 
-    // Update password
-    user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
-    await user.save();
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    
+    // Update only the password field using findByIdAndUpdate to avoid validation issues
+    await User.findByIdAndUpdate(userId, { 
+      password: hashedPassword,
+      updatedAt: new Date()
+    });
 
     return { success: true, message: 'Password changed successfully.' };
   } catch (error) {
     console.error('Change password error:', error);
-    return { success: false, message: 'An error occurred while changing password.' };
+    if (error instanceof Error) {
+      return { 
+        success: 0, 
+        message: error.message.includes('validation') 
+          ? 'Invalid password format. ' + error.message 
+          : 'An error occurred while changing password.' 
+      };
+    }
+    return { success: 0, message: 'An error occurred while changing password.' };
   }
 };
 
@@ -416,13 +474,13 @@ export const setPassword = async (userId: string, newPassword: string): Promise<
     const user = await User.findById(userId);
     
     if (!user) {
-      return { success: false, message: 'User not found' };
+      return { success: 0, message: 'User not found' };
     }
 
     // Only allow setting password for OAuth users who don't have a password
     if (!user.isOAuthUser || user.password) {
       return { 
-        success: false, 
+        success: 0, 
         message: 'Password cannot be set for this account.' 
       };
     }
@@ -435,16 +493,20 @@ export const setPassword = async (userId: string, newPassword: string): Promise<
     await user.save();
 
     return { 
-      success: true, 
+      success: 1, 
       message: 'Password set successfully. You can now log in with your email and password.' 
     };
   } catch (error) {
     console.error('Set password error:', error);
-    return { success: false, message: 'An error occurred while setting password.' };
+    return { success: 0, message: 'An error occurred while setting password.' };
   }
 };
 
-export const updateProfile = async (userId: string, updateData: { username?: string; email?: string; avatar?: string }): Promise<AuthResponse> => {
+export const updateProfile = async (userId: string, updateData: { 
+  firstName?: string; 
+  lastName?: string; 
+  email?: string;
+}): Promise<AuthResponse> => {
   // Find the user by ID
   const user = await User.findById(userId);
   if (!user) {
@@ -468,9 +530,9 @@ export const updateProfile = async (userId: string, updateData: { username?: str
   }
 
   // Update user fields
-  if (updateData.username) user.username = updateData.username;
+  if (updateData.firstName) user.firstName = updateData.firstName;
+  if (updateData.lastName) user.lastName = updateData.lastName;
   if (updateData.email) user.email = updateData.email;
-  if (updateData.avatar) user.avatar = updateData.avatar;
 
   // Save the updated user
   const updatedUser = await user.save();
@@ -478,7 +540,15 @@ export const updateProfile = async (userId: string, updateData: { username?: str
   // Generate new token with updated user data
   const token = generateToken(updatedUser);
   
-  return formatUserResponse(updatedUser, token);
+  // Return the updated user data and token
+  return {
+    id: updatedUser._id,
+    username: updatedUser.username,
+    email: updatedUser.email,
+    firstName: updatedUser.firstName,
+    lastName: updatedUser.lastName,
+  
+  };
 };
 
 /**
@@ -508,6 +578,7 @@ export const deleteUser = async (userId: string): Promise<{ success: boolean; me
 };
 
 export const resetPassword = async (token: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+  const logPrefix = '🔵 [RESET_PASSWORD]';
   try {
     // 1. Find user by reset token and check if token is not expired
     const user = await User.findOne({
@@ -536,11 +607,16 @@ export const resetPassword = async (token: string, newPassword: string): Promise
       message: 'Your password has been reset successfully. Please log in with your new password.' 
     };
   } catch (error) {
-    console.error('Reset password error:', error);
-    return { 
-      success: false, 
-      message: 'An error occurred while resetting your password. Please try again.' 
-    };
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    
+    console.error(`❌ ${logPrefix} [ERROR] Unhandled error in resetPassword:`, {
+      error: errorMessage,
+      stack: errorStack,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Re-throw the error to be caught by the outer try-catch
+    throw error;
   }
 }
-

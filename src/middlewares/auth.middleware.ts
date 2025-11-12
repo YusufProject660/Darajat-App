@@ -39,7 +39,10 @@ export const protect = async (
   
   // Check if token exists
   if (!token) {
-    return res.apiError('Not authorized, no token provided', 'UNAUTHORIZED');
+    return res.status(200).json({
+      status: 0,
+      message: "Authorization token is missing"
+    });
   }
 
   try {
@@ -58,7 +61,10 @@ export const protect = async (
     
     if (!decoded.id) {
       console.error('Token is missing user ID');
-      return res.apiError('Invalid token: Missing user ID', 'INVALID_TOKEN');
+      return res.status(200).json({
+        status: 0,
+        message: "Invalid or expired token"
+      });
     }
     
     // Get user from the token
@@ -66,7 +72,10 @@ export const protect = async (
     
     if (!user) {
       console.error(`User not found with ID: ${decoded.id}`);
-      return res.apiError('User not found', 'USER_NOT_FOUND');
+      return res.status(200).json({
+        status: 0,
+        message: "Invalid or expired token"
+      });
     }
 
     // Convert to plain object and explicitly type it as IUser
@@ -90,12 +99,10 @@ export const protect = async (
     return next();
   } catch (error) {
     console.error('Token verification error:', error);
-    if (error instanceof jwt.TokenExpiredError) {
-      return res.apiError('Token has expired', 'TOKEN_EXPIRED');
-    } else if (error instanceof jwt.JsonWebTokenError) {
-      return res.apiError('Invalid token', 'INVALID_TOKEN');
-    }
-    return res.apiError('Not authorized, token verification failed', 'AUTH_FAILED');
+    return res.status(200).json({
+      status: 0,
+      message: "Invalid or expired token"
+    });
   }
 };
 

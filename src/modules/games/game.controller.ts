@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
+import _ from 'lodash';
 
 import { AppError } from '../../utils/appError';
 import { GameRoom, IPlayer, IAnsweredQuestion } from './models/gameRoom.model';
@@ -10,6 +11,53 @@ import { Question } from './models/question.model';
 import { generateUniqueRoomCode } from './utils/generateRoomCode';
 import { IUser } from '../users/user.model';
 import { logger } from '../../utils/logger';
+
+/**
+ * Clean up game object before sending in response
+ */
+const cleanGameResponse = (game: any) => {
+  // Create a deep clone to avoid mutating the original object
+  const cleanedGame = _.cloneDeep(game);
+  
+  // Remove the specified fields
+  const fieldsToRemove = [
+    'results',
+    'currentQuestion',
+    'answeredQuestions',
+    'stats',
+    'createdAt',
+    'updatedAt',
+    '__v'
+  ];
+  
+  // Remove the fields if they exist
+  fieldsToRemove.forEach(field => {
+    if (field in cleanedGame) {
+      delete cleanedGame[field];
+    }
+  });
+
+  // Rename _id to game_id for the game object
+  if (cleanedGame._id) {
+    cleanedGame.game_id = cleanedGame._id;
+    delete cleanedGame._id;
+  }
+
+  // Rename _id to question_id in questions array
+  if (Array.isArray(cleanedGame.questions)) {
+    cleanedGame.questions = cleanedGame.questions.map((question: any) => {
+      if (question._id) {
+        const updatedQuestion = { ...question };
+        updatedQuestion.question_id = updatedQuestion._id;
+        delete updatedQuestion._id;
+        return updatedQuestion;
+      }
+      return question;
+    });
+  }
+  
+  return cleanedGame;
+};
 
 
 interface IGameRequest extends Request {
@@ -44,6 +92,36 @@ interface IGameLobbyRequest extends Request {
  */
  const createGame = async (req: IGameRequest, res: Response, next: NextFunction) => {
   try {
+    // Log the raw request details at the very start
+    console.log('=== GAME CONTROLLER - START ===');
+
+    // The categories are already processed and validated by the middleware
+    // Just log them for debugging
+    console.log('Processed categories from validation:', JSON.stringify(req.body.categories, null, 2));
+
+    // Convert camelCase keys to snake_case
+    if (req.body.numberOfQuestions !== undefined) {
+      req.body.number_of_questions = req.body.numberOfQuestions;
+      delete req.body.numberOfQuestions;
+    }
+
+    if (req.body.maximumPlayers !== undefined) {
+      req.body.maximum_player = req.body.maximumPlayers;
+      delete req.body.maximumPlayers;
+    }
+    console.log('Raw body from request:', JSON.stringify((req as any).rawBody, null, 2));
+    console.log('Parsed body from request:', JSON.stringify(req.body, null, 2));
+    console.log('Request headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Request method:', req.method);
+    console.log('Request URL:', req.originalUrl);
+    console.log('Request IP:', req.ip);
+    console.log('=== GAME CONTROLLER - END ===');
+    // Log raw request details at the very start
+    console.log('=== RAW REQUEST BODY ===');
+    console.log('Raw body:', JSON.stringify(req.body, null, 2));
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('========================');
+
     if (!req.user) {
       return res.apiError('User not authenticated', 'UNAUTHORIZED');
     }
@@ -56,57 +134,72 @@ interface IGameLobbyRequest extends Request {
     // let currentQuestionIndex = 0;
     // let gameStatus = 'waiting';
 
-    // Validate categories structure
-    if (!categories || typeof categories !== 'object' || Object.keys(categories).length === 0) {
-      logger.error('[createGame] 400: categories missing or empty');
-      return res.status(400).json({
-        status: 'error',
-        message: 'At least one category must be enabled'
-      });
-    }
+    // Categories are already validated by the middleware
+    // Just log them for debugging
+    console.log('Validated categories:', JSON.stringify(categories, null, 2));
 
     // Validate number of questions
-    if (typeof numberOfQuestions !== 'number' || numberOfQuestions < 1 || numberOfQuestions > 10) {
+    if (typeof numberOfQuestions !== 'number' || numberOfQuestions < 1 || numberOfQuestions > 60) {
       logger.error('[createGame] 400: invalid numberOfQuestions');
-      return res.apiError('Number of questions must be between 1 and 10', 'INVALID_INPUT');
+      return res.apiError('Number of questions must be between 1 and 60', 'INVALID_INPUT');
     }
 
     // Validate maximum players
-    if (typeof maximumPlayers !== 'number' || maximumPlayers < 2 || maximumPlayers > 10) {
-      logger.error('[createGame] 400: invalid maximumPlayers');
-      return res.apiError('Maximum players must be between 2 and 10', 'INVALID_INPUT');
+    if (isNaN(Number(maximumPlayers)) || !Number.isInteger(Number(maximumPlayers)) || 
+        Number(maximumPlayers) < 2 || Number(maximumPlayers) > 10) {
+      logger.error(`[createGame] 200: invalid maximumPlayers: ${maximumPlayers}`);
+      return res.status(200).json({
+        status: 0,
+        message: 'Maximum players must be an integer between 2 and 10'
+      });
     }
 
     // Process categories into the required format and collect enabled categories
     const processedCategories = new Map();
     const enabledCategories: Array<{category: string, difficulty: string}> = [];
 
+    // Categories are already validated by the middleware
+    // Just process them for the game
     for (const [category, settings] of Object.entries(categories as Record<string, any>)) {
-      if (settings && typeof settings === 'object' && settings.enabled) {
-        const difficulty = ['easy', 'medium', 'hard'].includes(settings.difficulty?.toLowerCase())
-          ? settings.difficulty.toLowerCase()
-          : 'easy';
-          
+      if (settings?.enabled) {
+        enabledCategories.push({
+          category: settings.name || category.toLowerCase(),
+          difficulty: settings.difficulty || 'easy'
+        });
+      }
+    }
+
+    // Debug: Log that we're starting the second pass
+    console.log('Starting second pass - processing categories');
+    
+    // Process the categories (validation already passed in first pass)
+    for (const [category, settings] of Object.entries(categories as Record<string, any>)) {
+      console.log(`Processing category: ${category}`, JSON.stringify(settings, null, 2));
+      
+      if (settings?.enabled) {
+        console.log(`Adding enabled category: ${category} with difficulty:`, settings.difficulty);
+        
         processedCategories.set(category, {
           enabled: true,
-          difficulty: difficulty
+          difficulty: settings.difficulty // Already validated and normalized in first pass
         });
         
         enabledCategories.push({
           category,
-          difficulty
+          difficulty: settings.difficulty
         });
       } else {
+        // For disabled categories, we don't need to process difficulty
         processedCategories.set(category, {
           enabled: false,
-          difficulty: 'easy'
+          difficulty: 'easy' // Default value for disabled categories
         });
       }
     }
 
     if (enabledCategories.length === 0) {
       logger.error('[createGame] 400: no enabled categories after processing');
-      return res.status(400).json({
+      return res.status(200).json({
         status: 'error',
         message: 'At least one category must be enabled'
       });
@@ -203,8 +296,11 @@ interface IGameLobbyRequest extends Request {
         populatedGame.settings.categories = Object.fromEntries(processedCategories);
       }
 
+      // Clean up the response before sending
+      const cleanedGame = cleanGameResponse(populatedGame);
+      
       // Use the centralized response format
-      return res.apiSuccess(populatedGame, 'Game created successfully');
+      return res.apiSuccess(cleanedGame, 'Game created successfully');
     } catch (error) {
       logger.error('Error in createGame:', error);
       return res.apiError('Failed to create game room', 'GAME_CREATION_FAILED');
@@ -270,14 +366,15 @@ interface IGameLobbyRequest extends Request {
 
     await gameRoom.save();
 
-    // Format the response data
+    // Format the response data with usernames (extract from email if needed)
     const responseData = {
       roomCode: gameRoom.roomCode,
       categories: gameRoom.settings.categories,
       numberOfQuestions: gameRoom.settings.numberOfQuestions,
       players: gameRoom.players.map((player: IPlayer) => ({
-        username: player.username,
-        avatar: player.avatar
+        username: player.username.includes('@') 
+          ? player.username.split('@')[0]  // Take part before @ if it's an email
+          : player.username
       })),
       status: gameRoom.status
     };
@@ -429,11 +526,10 @@ interface ISubmitAnswerRequest extends Request {
       return {
         _id: q._id,
         questionText: q.question || 'No question text available',
-        // text: q.question || 'No question text available',
         options: q.options || [],
         difficulty: q.difficulty || 'medium',
         category: q.category || 'General',
-        correctAnswer: q.correctAnswer,
+        // Removed correctAnswer from response to prevent cheating
         explanation: q.explanation,
         source: q.source
       };
@@ -442,7 +538,6 @@ interface ISubmitAnswerRequest extends Request {
     return res.apiSuccess({
       roomCode: gameRoom.roomCode,
       questions: formattedQuestions,
-      currentQuestion: gameRoom.currentQuestion || 0,
       totalQuestions: gameRoom.settings?.numberOfQuestions || formattedQuestions.length
     }, 'Questions retrieved successfully');
   } catch (error: unknown) {
@@ -1050,10 +1145,6 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       return res.status(200).json({
         status: 'success',
         message: 'Successfully left the game',
-        data: {
-          roomCode,
-          status: gameRoom.status
-        }
       });
     } catch (error) {
       await session.abortTransaction();
@@ -1214,8 +1305,7 @@ const startGame = async (req: Request, res: Response, next: NextFunction) => {
     if (!allPlayersReady) {
       return res.status(200).json({
         status: 0,
-        message: 'All players must be ready before starting the game',
-        data: {}
+        message: 'All players must be ready before starting the game'
       });
     }
 
@@ -1514,6 +1604,96 @@ const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: NextFun
   }
 };
 
+// Interface for get my games request
+interface IGetMyGamesRequest extends Request {
+  user?: IUser;
+  query: {
+    page?: string;
+    limit?: string;
+  };
+}
+
+/**
+ * @desc    Get all games created by the logged-in user
+ * @route   GET /api/game/my-games
+ * @access  Private
+ */
+export const getMyGames = async (req: IGetMyGamesRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    
+    // Check if user ID exists
+    if (!userId) {
+      return res.status(401).json({
+        status: 0,
+        message: "User ID not found from token"
+      });
+    }
+
+    // Pagination
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 10;
+    const skip = (page - 1) * limit;
+
+    // Find games where the user is the host
+    const games = await GameRoom.find({ hostId: userId })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    if (!games || games.length === 0) {
+      return res.status(200).json({
+        status: 1,
+        message: "No games found for this user",
+        data: []
+      });
+    }
+
+    // Format the response with only necessary fields
+    const formattedGames = games.map(game => {
+      // Extract enabled categories
+      const enabledCategories = Object.entries(game.settings?.categories || {})
+        .filter(([_, isEnabled]) => isEnabled)
+        .map(([category]) => category);
+
+      // Extract difficulty levels
+      const difficultyLevels = game.settings?.difficultyLevels || {};
+
+      // Format players
+      const players = game.players?.map(player => ({
+        username: player.username,
+        score: player.score || 0,
+        isHost: player.userId?.toString() === game.hostId?.toString()
+      })) || [];
+
+      return {
+        roomCode: game.roomCode,
+        hostId: game.hostId,
+        playersCount: game.players?.length || 0,
+        players,
+        categories: enabledCategories,
+     
+        numberOfQuestions: game.settings?.numberOfQuestions || 10, // Default to 10 if not set
+        maximumPlayers: game.settings?.maximumPlayers || 10, // Default to 10 if not set
+        createdAt: game.createdAt
+      };
+    });
+
+    return res.status(200).json({
+      status: 1,
+      message: "Games fetched successfully",
+      data: formattedGames
+    });
+  } catch (error) {
+    console.error('Error fetching user games:', error);
+    return res.status(500).json({
+      status: 0,
+      message: "Something went wrong"
+    });
+  }
+};
+
 // Interface for toggle ready status request
 interface IToggleReadyStatusRequest extends Request {
   params: {
@@ -1590,8 +1770,6 @@ export {
   createGame,
   getGameRoom,
   joinGame,
-  toggleReadyStatus,
-  getGameLobby,
   leaveGame,
   getQuestions,
   submitAnswer,
@@ -1600,5 +1778,8 @@ export {
   finishGame,
   startGame,
   kickPlayer,
-  updateGameSettings
+  updateGameSettings,
+  getGameLobby,
+  toggleReadyStatus,
+  getMyGames
 };

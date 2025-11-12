@@ -1,4 +1,5 @@
 import express, { Application, Request, Response } from 'express';
+import path from 'path';
 import http, { Server } from 'http';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -24,7 +25,7 @@ import { responseFormatter } from './middlewares/responseFormatter';
 import 'express-async-errors';
 import './config/passport';
 import { logger, stream } from './utils/logger';
-import { initializeTransporter } from './config/email';
+import { initializeTransporter } from './services/email.service';
 
 export class App {
   public app: Application;
@@ -94,6 +95,15 @@ export class App {
       return this.server;
     }
 
+    // Initialize email transporter early
+    try {
+      await initializeTransporter();
+      logger.info('✅ Email transporter initialized successfully');
+    } catch (error) {
+      logger.warn('⚠️ Failed to initialize email transporter. Email functionality may be limited.');
+      logger.error('Email transporter error:', error);
+    }
+
     try {
       await this.initializeDatabase();
 
@@ -128,14 +138,97 @@ export class App {
   }
 
   private initializeMiddlewares() {
+    // Add request timeout middleware (30 seconds)
+    this.app.use((req, res, next) => {
+      const timeout = 30000; // 30 seconds
+      const timer = setTimeout(() => {
+        if (!res.headersSent) {
+          console.warn(`⚠️ Request timeout after ${timeout}ms: ${req.method} ${req.originalUrl}`);
+          res.status(200).json({
+            status: 0,
+            message: 'Request timeout. The server is taking too long to respond.',
+            code: 'REQUEST_TIMEOUT'
+          });
+        }
+      }, timeout);
+
+      // Clean up the timeout on response finish/close/error
+      res.on('finish', () => clearTimeout(timer));
+      res.on('close', () => clearTimeout(timer));
+      res.on('error', () => clearTimeout(timer));
+      next();
+    });
+
+    // Add request logging middleware
+    this.app.use((req, res, next) => {
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+      console.log('Headers:', JSON.stringify(req.headers, null, 2));
+      
+      // Log response
+      const originalSend = res.send;
+      res.send = function(data: any) {
+        console.log('Response:', data);
+        return originalSend.call(this, data);
+      };
+      
+      next();
+    });
+    
+    // Body parsing middleware for JSON
+    this.app.use(express.json());
+    
+    // Body parsing middleware for URL-encoded data
+    this.app.use(express.urlencoded({ extended: true }));
+    
+    // Log request body after it's been parsed
+    this.app.use((req, res, next) => {
+      if (req.body && Object.keys(req.body).length > 0) {
+        console.log('Request body:', req.body);
+      }
+      next();
+    });
+    
+    // Serve static files from the public directory - this needs to be before other middlewares
+    const publicDir = path.join(__dirname, '../../public');
+    console.log(`Serving static files from: ${publicDir}`);
+    this.app.use(express.static(publicDir));
+    
+    // Add body parser for JSON
+    this.app.use(express.json());
+    this.app.use(express.urlencoded({ extended: true }));
+    
+    // Add morgan logging
     this.app.use(morgan('combined', { stream }));
+    
+    // Add raw body parser for specific routes
+    this.app.use(['/api/auth/forgot-password', '/api/auth/reset-password'], (req, res, next) => {
+      const chunks: Buffer[] = [];
+      
+      req.on('data', (chunk) => {
+        chunks.push(chunk);
+      });
+      
+      req.on('end', () => {
+        if (chunks.length > 0) {
+          const rawBody = Buffer.concat(chunks).toString('utf8');
+          (req as any).rawBody = rawBody;
+          try {
+            req.body = JSON.parse(rawBody);
+          } catch (e) {
+            console.log('Could not parse body as JSON');
+          }
+        }
+        next();
+      });
+    });
 
     const allowedOrigins = [
       'http://127.0.0.1:5500',
       'http://localhost:5500',
       'http://localhost:3000',
       'http://localhost:5173',
-      config.clientUrl
+      config.clientUrl,
+      config.frontendUrl
     ].filter(Boolean) as string[];
 
     const corsOptions = {
@@ -156,6 +249,38 @@ export class App {
     this.app.use(cors(corsOptions));
     this.app.set('trust proxy', 1);
     this.app.use(express.json());
+    
+    // Middleware to preserve empty strings in request body
+    this.app.use((req, res, next) => {
+      if (req.body) {
+        const preserveEmptyStrings = (obj: any) => {
+          if (obj === null || obj === undefined) return obj;
+          if (typeof obj === 'object') {
+            for (const key in obj) {
+              if (obj[key] === '') {
+                // Keep empty strings as is
+                obj[key] = '';
+              } else if (typeof obj[key] === 'object') {
+                preserveEmptyStrings(obj[key]);
+              }
+            }
+          }
+          return obj;
+        };
+        
+        // Log the body before and after processing for debugging
+        console.log('=== BEFORE PRESERVING EMPTY STRINGS ===');
+        console.log(JSON.stringify(req.body, null, 2));
+        
+        preserveEmptyStrings(req.body);
+        
+        console.log('=== AFTER PRESERVING EMPTY STRINGS ===');
+        console.log(JSON.stringify(req.body, null, 2));
+        console.log('====================================');
+      }
+      next();
+    });
+    
     this.app.use(express.urlencoded({ extended: true }));
     this.app.use(mongoSanitize());
     this.app.use(helmet());
@@ -280,18 +405,36 @@ export class App {
   private initializeSocketIO() {
     if (!this.server) throw new Error('HTTP server not initialized');
 
-    this.io = new SocketIOServer(this.server, {
-      cors: {
-        origin: config.clientUrl || 'http://localhost:3000',
-        methods: ['GET', 'POST']
-      },
-      path: '/ws/socket.io'
-    });
+    try {
+      // Create the Socket.IO server with all configuration
+      this.io = new SocketIOServer(this.server, {
+        cors: {
+          origin: process.env.NODE_ENV === 'production' 
+            ? ['https://your-production-domain.com'] 
+            : '*',
+          methods: ['GET', 'POST'],
+          credentials: true
+        },
+        path: '/ws/socket.io',
+        maxHttpBufferSize: 1e8, // 100MB
+        connectTimeout: 30000,  // 30 seconds
+        transports: ['websocket', 'polling'],
+        // These are the correct properties for Socket.IO v4
+        pingInterval: 30000,   // 30 seconds
+        pingTimeout: 60000,    // 60 seconds
+        // @ts-ignore - The types might be outdated, but these properties are valid in v4
+        allowEIO3: true        // Enable compatibility with older clients if needed
+      });
 
-    initializeSocket(this.server, this.io);
-    console.log('🔌 WebSocket server initialized');
+      // Initialize socket service with the server and io instance
+      initializeSocket(this.server, this.io);
+      logger.info('✅ WebSocket server initialized');
+
+    } catch (error) {
+      logger.error('❌ Failed to initialize Socket.IO:', error);
+      throw error;
+    }
   }
-
   private initializeErrorHandling(): void {
     // 404 handler
     this.app.all('*', notFoundHandler);

@@ -228,11 +228,21 @@ class GameService implements IGameService {
       const updatedRoom = await room.save({ session });
       await session.commitTransaction();
       
+      // Format player data, extracting usernames from emails if needed
+      const formattedRoom = {
+        ...updatedRoom.toObject(),
+        players: updatedRoom.players.map((player: any) => ({
+          username: player.username.includes('@') 
+            ? player.username.split('@')[0]  // Take part before @ if it's an email
+            : player.username
+        }))
+      };
+
       // Broadcast update to all clients in the room
       if (this.io) {
         this.io.to(roomCode).emit('player:joined', {
           success: true,
-          data: updatedRoom
+          data: formattedRoom
         });
       }
 

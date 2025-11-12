@@ -1,13 +1,48 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { protect } from '../../middlewares/auth.middleware';
 import { isHost, isGameInLobby } from '../../middlewares/game.middleware';
 import { validateCreateGame, validateJoinGame } from './validations/game.validations';
 import { IUser } from '../users/user.model';
+
+// Middleware to handle method not allowed
+export const methodNotAllowed = (req: Request, res: Response, next: NextFunction) => {
+  const allowedMethods = ['POST', 'GET']; // Add more methods as needed for other routes
+  const routePath = req.path;
+  
+  // Determine the allowed method based on the route
+  let allowedMethod = 'POST'; // Default to POST for backward compatibility
+  
+  if (routePath.includes('/lobby/') || routePath.startsWith('/summary/') || routePath.startsWith('/leaderboard/')) {
+    allowedMethod = 'GET';
+  } else if (routePath === '/create' || routePath === '/join') {
+    allowedMethod = 'POST';
+  }
+  
+  if (req.method !== allowedMethod) {
+    return res.status(200).json({
+      status: 0,
+      message: `Invalid request method. Only ${allowedMethod} is allowed for this endpoint.`
+    });
+  }
+  next();
+};
+
+// Middleware to validate PATCH method for specific routes
+export const validatePatchMethod = (req: Request, res: Response, next: NextFunction) => {
+  if (req.method !== 'PATCH') {
+    return res.status(200).json({
+      status: 0,
+      message: 'Method not allowed. Use PATCH for this endpoint.'
+    });
+  }
+  next();
+};
 import {
   createGame, 
   getGameRoom, 
   joinGame, 
-  getGameLobby, 
+  getGameLobby,
+  getMyGames, 
   leaveGame,
   getQuestions,
   submitAnswer,
@@ -27,14 +62,18 @@ const router = express.Router();
  * @desc    Create a new game room
  * @access  Private
  */
-router.post('/create', protect, validateCreateGame, createGame);
+router.route('/create')
+  .post(protect, validateCreateGame, createGame)
+  .all(methodNotAllowed);
 
 /**
  * @route   POST /api/game/join
  * @desc    Join an existing game room
  * @access  Private
  */
-router.post('/join', protect, validateJoinGame, joinGame);
+router.route('/join')
+  .post(protect, validateJoinGame, joinGame)
+  .all(methodNotAllowed);
 
 /**
  * @route   GET /api/game/room/:code
@@ -47,7 +86,9 @@ router.get('/room/:code', protect, getGameRoom);
  * @desc    Get game lobby details by room code
  * @access  Private
  */
-router.get('/lobby/:roomCode', protect, getGameLobby);
+router.route('/lobby/:roomCode')
+  .get(protect, getGameLobby)
+  .all(methodNotAllowed);
 
 
 // Add this route with other routes
@@ -56,21 +97,27 @@ router.get('/lobby/:roomCode', protect, getGameLobby);
  * @desc    Leave a game room
  * @access  Private
  */
-router.post('/leave', protect, leaveGame);
+router.route('/leave')
+  .post(protect, leaveGame)
+  .all(methodNotAllowed);
 
 /**
  * @route   GET /api/game/questions/:roomCode
  * @desc    Get all questions for a game room
  * @access  Private
  */
-router.get('/questions/:roomCode', protect, getQuestions);
+router.route('/questions/:roomCode')
+  .get(protect, getQuestions)
+  .all(methodNotAllowed);
 
 /**
  * @route   POST /api/game/submit-answer
  * @desc    Submit an answer to a question
  * @access  Private
  */
-router.post('/submit-answer', protect, submitAnswer);
+router.route('/submit-answer')
+  .post(protect, submitAnswer)
+  .all(methodNotAllowed);
 
 /**
  * @route   GET /api/game/summary/:roomCode
@@ -99,35 +146,69 @@ interface IFinishGameRequest extends Request {
   user?: IUser;
 }
 
+/**
+ * @route   GET /api/game/my-games
+ * @desc    Get all games created by the logged-in user
+ * @access  Private
+ */
+router.get('/my-games', protect, getMyGames);
+
 // Host-only routes
-router.patch('/finish/:roomCode', protect, isHost, (req: IFinishGameRequest, res: Response, next) => finishGame(req, res, next));
+router.patch('/finish/:roomCode', validatePatchMethod, protect, isHost, (req: IFinishGameRequest, res: Response, next) => finishGame(req, res, next));
 
 /**
  * @route   PATCH /api/game/:roomCode/ready
  * @desc    Toggle player's ready status
  * @access  Private
  */
-router.patch('/:roomCode/ready', protect, (req: Request, res: Response, next: NextFunction) => toggleReadyStatus(req, res, next));
+router.route('/:roomCode/ready')
+  .patch(protect, (req: Request, res: Response, next: NextFunction) => toggleReadyStatus(req, res, next))
+  .all(methodNotAllowed);
 
 /**
  * @route   POST /api/game/:roomCode/start
  * @desc    Start the game (Host only)
  * @access  Private
  */
-router.post('/:roomCode/start', protect, isHost, isGameInLobby, startGame);
+router.route('/:roomCode/start')
+  .post(protect, isHost, isGameInLobby, startGame)
+  .all(methodNotAllowed);
 
 /**
  * @route   POST /api/game/:roomCode/players/:playerId/kick
  * @desc    Kick a player from the game (Host only)
  * @access  Private
  */
-router.post('/:roomCode/players/:playerId/kick', protect, isHost, kickPlayer);
+router.route('/:roomCode/players/:playerId/kick')
+  .post(protect, isHost, kickPlayer)
+  .all((req: Request, res: Response) => {
+    res.status(200).json({
+      status: 0,
+      message: 'Method not allowed. Use POST for this endpoint.'
+    });
+  });
 
 /**
- * @route   PATCH /api/game/:roomCode/settings
- * @desc    Update game settings (Host only)
+ * @route   PATCH /api/game/settings/:roomCode
+ * @desc    Update game settings
+ * @access  Private (Host only)
+ */
+router.route('/settings/:roomCode')
+  .patch(validatePatchMethod, protect, isHost, updateGameSettings)
+  .all(methodNotAllowed);
+
+/**
+ * @route   GET /api/game/summary/:roomCode
+ * @desc    Get game summary for the logged-in user
  * @access  Private
  */
-router.patch('/:roomCode/settings', protect, isHost, isGameInLobby, updateGameSettings);
+router.get('/summary/:roomCode', protect, getGameSummary);
+
+/**
+ * @route   GET /api/game/leaderboard/:roomCode
+ * @desc    Get the leaderboard for a completed game
+ * @access  Private
+ */
+router.get('/leaderboard/:roomCode', protect, getGameLeaderboard);
 
 export default router;

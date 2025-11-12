@@ -22,6 +22,8 @@ import bcrypt from 'bcryptjs';
 export interface IUser extends Document {
   _id: Schema.Types.ObjectId;
   username: string;
+  firstName: string;
+  lastName?: string;
   email: string;
   password?: string; // Make password optional for OAuth users
   avatar?: string;
@@ -39,6 +41,7 @@ export interface IUser extends Document {
   role: 'player' | 'admin';
   resetToken?: string;
   resetTokenExpires?: Date;
+  lastResetRequest?: Date;
   authProvider?: 'google' | 'email';
   isOAuthUser?: boolean;
   hasPassword?: boolean; // Explicitly track if user has a password set
@@ -52,10 +55,18 @@ export interface IUser extends Document {
 
 const userSchema = new Schema<IUser>(
   {
+    firstName: {
+      type: String,
+      trim: true,
+      maxlength: [50, 'First name cannot be more than 50 characters']
+    },
+    lastName: {
+      type: String,
+      trim: true,
+      maxlength: [50, 'Last name cannot be more than 50 characters']
+    },
     username: {
       type: String,
-      required: [true, 'Please add a username'],
-      unique: true,
       trim: true,
       minlength: [3, 'Username must be at least 3 characters']
     },
@@ -110,6 +121,13 @@ const userSchema = new Schema<IUser>(
     password: {
       type: String,
       minlength: [6, 'Password must be at least 6 characters'],
+      maxlength: [20, 'Password must be less than or equal to 20 characters'],
+      validate: {
+        validator: function(v: string) {
+          return v.length <= 20;
+        },
+        message: 'Password must be less than or equal to 20 characters'
+      },
       select: false // Don't return password by default
     },
     authProvider: {
@@ -151,6 +169,10 @@ const userSchema = new Schema<IUser>(
       select: false
     },
     resetTokenExpires: {
+      type: Date,
+      select: false
+    },
+    lastResetRequest: {
       type: Date,
       select: false
     }
