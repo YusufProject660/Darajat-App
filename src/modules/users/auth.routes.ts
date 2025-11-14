@@ -16,6 +16,7 @@ import {
   deleteUserAccount,
   logoutUser
 } from './auth.controller';
+import { forgotPassword as forgotPasswordService } from './auth.service';
 import { protect } from '../../middlewares/auth.middleware';
 import { authorize } from '../../middlewares/role.middleware';
 
@@ -130,7 +131,7 @@ const handleForgotPassword = async (req: Request, res: Response, next: NextFunct
 
     // Call the forgotPassword service with timeout
     const result = await Promise.race([
-      forgotPassword(normalizedEmail),
+      forgotPasswordService(normalizedEmail),
       timeoutPromise
     ]);
 

@@ -126,33 +126,16 @@ export class App {
   }
 
   private initializeMiddlewares() {
-    // Add raw body parser first for specific routes
-    this.app.use((req, res, next) => {
-      // Only process for specific paths that need raw body
-      if (req.path.includes('/api/auth/')) {
-        const chunks: Buffer[] = [];
-        
-        req.on('data', (chunk) => {
-          chunks.push(chunk);
-        });
-        
-        req.on('end', () => {
-          if (chunks.length > 0) {
-            const rawBody = Buffer.concat(chunks).toString('utf8');
-            (req as any).rawBody = rawBody;
-            try {
-              req.body = JSON.parse(rawBody);
-            } catch (e) {
-              console.log('Could not parse body as JSON');
-            }
+    // Global JSON parser with raw body capture for auth routes
+    this.app.use(
+      express.json({
+        verify: (req, _res, buf) => {
+          if (req.path.startsWith('/api/auth/')) {
+            (req as any).rawBody = buf?.toString('utf8');
           }
-          next();
-        });
-      } else {
-        // For other routes, use the standard JSON parser
-        express.json()(req, res, next);
-      }
-    });
+        },
+      })
+    );
 
     // Add request timeout middleware (30 seconds)
     this.app.use((req, res, next) => {
@@ -189,9 +172,6 @@ export class App {
       
       next();
     });
-    
-    // Body parsing middleware for JSON
-    this.app.use(express.json());
     
     // Body parsing middleware for URL-encoded data
     this.app.use(express.urlencoded({ extended: true }));

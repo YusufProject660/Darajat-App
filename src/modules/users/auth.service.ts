@@ -483,6 +483,31 @@ export const setPassword = async (userId: string, newPassword: string): Promise<
       message: 'Password set successfully. You can now log in with your email and password.' 
     };
   } catch (error) {
+    console.error('Set password error:', error);
+    return { success: 0, message: 'Failed to set password. Please try again later.' };
+  }
+};
+
+/**
+ * Update user profile details
+ */
+export const updateProfile = async (
+  userId: string,
+  updateData: {
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    username?: string;
+  }
+): Promise<AuthResponse> => {
+  const user = await User.findById(userId);
+
+  if (!user) {
+    throw new AppError('User not found', 404);
+  }
+
+  // Check if email is being updated and if it already exists
+  if (updateData.email && updateData.email !== user.email) {
     const emailExists = await User.findOne({ email: updateData.email });
     if (emailExists) {
       throw new AppError('Email already in use', 409);
@@ -498,36 +523,15 @@ export const setPassword = async (userId: string, newPassword: string): Promise<
   }
 
   // Update user fields
-  if (updateData.firstName) user.firstName = updateData.firstName;
-  if (updateData.lastName) user.lastName = updateData.lastName;
-  if (updateData.email) user.email = updateData.email;
-  if (updateData.username) user.username = updateData.username;
+  if (typeof updateData.firstName === 'string') user.firstName = updateData.firstName;
+  if (typeof updateData.lastName === 'string') user.lastName = updateData.lastName;
+  if (typeof updateData.email === 'string') user.email = updateData.email;
+  if (typeof updateData.username === 'string') user.username = updateData.username;
 
-  // Save the updated user
   const updatedUser = await user.save();
-  
-  // Generate new token with updated user data
   const token = generateToken(updatedUser);
-  
-  // Return the updated user data and token
-  return {
-    id: updatedUser._id.toString(),
-    username: updatedUser.username,
-    email: updatedUser.email,
-    firstName: updatedUser.firstName,
-    lastName: updatedUser.lastName,
-    role: updatedUser.role as 'player' | 'admin',
-    stats: {
-      gamesPlayed: updatedUser.stats?.gamesPlayed || 0,
-      accuracy: updatedUser.stats?.accuracy || 0,
-      bestScore: updatedUser.stats?.bestScore || 0,
-    },
-    gamesPlayed: updatedUser.stats?.gamesPlayed || 0,
-    accuracy: updatedUser.stats?.accuracy || 0,
-    bestScore: updatedUser.stats?.bestScore || 0,
-    token: token,
-    avatar: updatedUser.avatar
-  };
+
+  return formatUserResponse(updatedUser, token);
 };
 
 /**

@@ -841,14 +841,14 @@ export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Resp
 
   try {
     const updatedUser = await updateProfile(req.user!.id, { firstName, lastName, email });
+    const { token, ...sanitizedUser } = updatedUser;
     
     return res.apiSuccess({
-      userId: updatedUser.id,
-      username: updatedUser.username,
-      email: updatedUser.email,
-      firstName: updatedUser.firstName,
-      lastName: updatedUser.lastName,
-      token: updatedUser.token
+      userId: sanitizedUser.id,
+      username: sanitizedUser.username,
+      email: sanitizedUser.email,
+      firstName: sanitizedUser.firstName,
+      lastName: sanitizedUser.lastName
     }, 'Profile updated successfully');
   } catch (error: any) {
     if (error.message === 'Email already in use' || error.message === 'Username already taken') {
