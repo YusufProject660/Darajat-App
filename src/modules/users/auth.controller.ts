@@ -1,50 +1,18 @@
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import path from 'path';
 import fs from 'fs/promises';
 import fsSync from 'fs';
-import { sendEmail } from "../../services/email.service";
 import { config } from '../../config/env';
-import { IUser } from './user.model'; // Make sure this path is correct
+import { IUser } from './user.model';
 import { register, login, getMe, forgotPassword, resetPassword, changePassword as changePasswordService, updateProfile, deleteUser } from './auth.service';
 import { addToBlacklist } from '../../utils/tokenBlacklist';
 import { AppError } from '../../utils/appError';
-import asyncHandler from '../../middleware/async';
+import { AuthRequest } from './types/user.types';
+import asyncHandler from '../middleware/async';
 
-// Password validation utility function
-const validatePassword = (password: string): { isValid: boolean; message: string } => {
-  // Check minimum length
-  if (password.length < 8) {
-    return { isValid: false, message: 'Password must be at least 8 characters long.' };
-  }
-
-  // Check for uppercase letter
-  if (!/[A-Z]/.test(password)) {
-    return { isValid: false, message: 'Password must contain at least one uppercase letter.' };
-  }
-
-  // Check for lowercase letter
-  if (!/[a-z]/.test(password)) {
-    return { isValid: false, message: 'Password must contain at least one lowercase letter.' };
-  }
-
-  // Check for number
-  if (!/\d/.test(password)) {
-    return { isValid: false, message: 'Password must contain at least one number (0-9).' };
-  }
-
-  // Check for special character
-  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>/?]+/.test(password)) {
-    return { isValid: false, message: 'Password must contain at least one special character.' };
-  }
-
-  // Check for whitespace
-  if (/\s/.test(password)) {
-    return { isValid: false, message: 'Password cannot contain whitespace.' };
-  }
-
-  return { isValid: true, message: 'Password is valid.' };
-};
+// Import the password validation utility
+import { validatePassword } from '../../utils/passwordValidator';
 
 // Helper function to generate JWT token
 const generateToken = (user: IUser): string => {
@@ -56,28 +24,7 @@ const generateToken = (user: IUser): string => {
     config.jwtSecret, 
     { expiresIn: '100y' }
   );
-};
-
-// Extend the Express Request type to include our user property
-declare global {
-  namespace Express {
-    interface User {
-      _id: string;
-      id: string;
-      role: 'player' | 'admin';
-      email: string;
-      password: string;
-      confirmPassword: string;
-      [key: string]: any;
-    }
-    
-    interface Request {
-      user?: User;
-    }
-  }
 }
-
-type AuthRequest = Request;
 
 // @desc    Register a new user
 // @route   POST /api/auth/signup
@@ -308,68 +255,72 @@ export const loginUser = asyncHandler(async (req: Request, res: Response, next: 
     next(error);
   }
 });
-
 // @desc    Get current user profile
 // @route   GET /api/auth/me
 // @access  Private
 export const getMeHandler = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
-  if (!req.user?._id) {
-    return next(new AppError('User not authenticated', 401));
-  }
-  
-  const user = await getMe(req.user._id.toString());
-  
-  if (!user) {
-    return next(new AppError('User not found', 404));
-  }
-  
-  // Format the response to match the required structure
-  return res.status(200).json({
-    status: 1,
-    message: 'User profile fetched successfully',
-    data: {
-      userId: user.id,
-        
-      email: user.email,
-      token: user.token,
-
+  try {
+    if (!req.user?._id) {
+      return next(new AppError('User not authenticated', 401));
     }
-  });
+    
+    const user = await getMe(req.user._id.toString());
+    
+    // Format the response to match the required structure
+    return res.status(200).json({
+      status: 1,
+      message: 'User profile fetched successfully',
+      data: {
+        id: user.id,
+        username: user.username,
+        firstName: user.firstName,
+        ...(user.lastName && { lastName: user.lastName }),
+        email: user.email,
+        ...(user.avatar && { avatar: user.avatar }),
+        role: user.role,
+        stats: {
+          gamesPlayed: user.stats.gamesPlayed,
+          accuracy: user.stats.accuracy,
+          bestScore: user.stats.bestScore
+        },
+        token: user.token
+      }
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'User not found') {
+      return next(new AppError('User not found', 404));
+    }
+    return next(error);
+  }
 });
+
 // @desc    Logout user / clear token
 // @route   POST /api/auth/logout
 // @access  Private
-export const logoutUser = async (req: Request, res: Response) => {
-  try {
-    // Get token from header
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(200).json({
-        status: 0,
-        message: 'No token provided'
-      });
-    }
-
-    const token = authHeader.split(' ')[1];
-    
-    // Add the token to the blacklist
-    addToBlacklist(token);
-
-    // Clear the JWT token cookie if you're using cookies
-    res.clearCookie('jwt');
-
-    return res.status(200).json({
-      status: 1,
-      message: 'User logged out successfully'
-    });
-  } catch (error) {
+export const logoutUser = asyncHandler(async (req: Request, res: Response) => {
+  // Get token from header
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(200).json({
       status: 0,
-      message: 'Logout failed'
+      message: 'No token provided'
     });
   }
-};
+
+  const token = authHeader.split(' ')[1];
+  
+  // Add the token to the blacklist
+  addToBlacklist(token);
+
+  // Clear the JWT token cookie if you're using cookies
+  res.clearCookie('jwt');
+
+  return res.status(200).json({
+    status: 1,
+    message: 'User logged out successfully'
+  });
+});
 
 // @desc    Check if user is admin
 // @route   GET /api/auth/admin
@@ -414,22 +365,22 @@ export const googleAuthSuccess = (req: Request, res: Response) => {
     const { token } = req.query;
     
     if (!token) {
-      return res.status(400).json({
-        success: false,
-        error: 'No token provided'
+      return res.status(200).json({
+        status: 0,
+        message: 'No token provided'
       });
     }
     
     return res.status(200).json({
-      success: true,
-      token,
-      message: 'Google authentication successful'
+      status: 1,
+      message: 'Google authentication successful',
+      data: { token }
     });
   } catch (error) {
     console.error('Google OAuth success error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error'
+    return res.status(200).json({
+      status: 0,
+      message: 'Internal server error'
     });
   }
 };
@@ -438,8 +389,8 @@ export const googleAuthSuccess = (req: Request, res: Response) => {
 // @route   GET /api/auth/google/failure
 // @access  Public
 export const googleAuthFailure = (_req: Request, res: Response) => {
-  res.status(401).json({
-    success: false,
+  res.status(200).json({
+    status: 0,
     message: 'Google authentication failed',
   });
   return; // Explicit return to satisfy TypeScript
@@ -603,31 +554,31 @@ export const resetPasswordHandler = async (req: Request, res: Response, next: Ne
 
     // Validate token
     if (!token) {
-      return res.status(400).json({
-        success: false,
+      return res.status(200).json({
+        status: 0,
         message: 'Token is required'
       });
     }
 
     // Validate passwords
     if (!password || !confirmPassword) {
-      return res.status(400).json({
-        success: false,
+      return res.status(200).json({
+        status: 0,
         message: 'Both password and confirm password are required'
       });
     }
 
     if (password !== confirmPassword) {
-      return res.status(400).json({
-        success: false,
+      return res.status(200).json({
+        status: 0,
         message: 'Passwords do not match'
       });
     }
 
     const passwordValidation = validatePassword(password);
     if (!passwordValidation.isValid) {
-      return res.status(400).json({
-        success: false,
+      return res.status(200).json({
+        status: 0,
         message: passwordValidation.message
       });
     }
@@ -635,20 +586,20 @@ export const resetPasswordHandler = async (req: Request, res: Response, next: Ne
     const result = await resetPassword(token, password);
     
     if (!result.success) {
-      return res.status(400).json({
-        success: false,
+      return res.status(200).json({
+        status: 0,
         message: result.message
       });
     }
 
     res.status(200).json({
-      success: true,
+      status: 1,
       message: result.message || 'Password has been reset successfully'
     });
   } catch (error) {
     console.error('Error in resetPasswordHandler:', error);
-    res.status(500).json({
-      success: false,
+    res.status(200).json({
+      status: 0,
       message: 'An error occurred while resetting your password'
     });
   }

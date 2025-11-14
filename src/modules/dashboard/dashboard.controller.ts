@@ -34,11 +34,7 @@ export const getDashboardData = async (_req: Request, res: Response): Promise<vo
       .lean<IDashboardData>();
     
     if (!dashboardData) {
-      res.status(404).json({
-        success: false,
-        message: 'Dashboard configuration not found.'
-      });
-      return;
+      return res.apiError('Dashboard configuration not found.', 'DASHBOARD_NOT_FOUND');
     }
 
     // Prepare and send success response with only funGames
@@ -47,9 +43,6 @@ export const getDashboardData = async (_req: Request, res: Response): Promise<vo
     }, 'Dashboard data fetched successfully');
   } catch (error) {
     console.error('Error fetching dashboard data:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Unable to fetch dashboard data at the moment. Please try again later.'
-    });
+    return res.apiError('Unable to fetch dashboard data at the moment. Please try again later.', 'DASHBOARD_FETCH_ERROR');
   }
 };

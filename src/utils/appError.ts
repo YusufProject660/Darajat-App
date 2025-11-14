@@ -1,37 +1,40 @@
+// src/utils/appError.ts
 export class AppError extends Error {
   statusCode: number;
   isOperational: boolean;
-  details?: any;
+  details: any;
 
-  constructor(message: string, statusCode = 500, isOperational = true, details?: any) {
+  constructor(
+    message: string, 
+    statusCode: number = 500, 
+    isOperational: boolean = true, 
+    details: any = {}
+  ) {
     super(message);
     this.statusCode = statusCode;
     this.isOperational = isOperational;
-    this.details = details;
-    Error.captureStackTrace(this, this.constructor);
+    // Remove code from details
+    const { code, ...rest } = details;
+    this.details = Object.keys(rest).length > 0 ? rest : undefined;
   }
 
-  static badRequest(message = "Bad Request", details?: any) {
+  static badRequest(message: string, details?: any) {
     return new AppError(message, 400, true, details);
   }
 
-  static unauthorized(message = "Unauthorized", details?: any) {
+  static unauthorized(message: string = 'Unauthorized', details?: any) {
     return new AppError(message, 401, true, details);
   }
 
-  static forbidden(message = "Forbidden", details?: any) {
-    return new AppError(message, 403, true, details);
-  }
-
-  static notFound(message = "Not Found", details?: any) {
+  static notFound(message: string = 'Not Found', details?: any) {
     return new AppError(message, 404, true, details);
   }
 
-  static conflict(message = "Conflict", details?: any) {
+  static conflict(message: string = 'Conflict', details?: any) {
     return new AppError(message, 409, true, details);
   }
 
-  static internal(message = "Internal Server Error", details?: any) {
+  static internal(message: string = 'Internal Server Error', details?: any) {
     return new AppError(message, 500, false, details);
   }
 }

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import asyncHandler from '../../../middleware/async';
+import asyncHandler from '../../middleware/async';
 import User from '../user.model';
 import { upload } from '../../../middlewares/upload';
 import { updateProfile, formatUserResponse, generateToken } from '../auth.service';
@@ -20,11 +20,7 @@ export const updateUserProfile = asyncHandler(async (req: Request, res: Response
   const { firstName, lastName, email } = req.body;
   
   if (!req.user?._id) {
-    return res.status(401).json({
-      status: 0,
-      message: 'Not authorized',
-      error: 'UNAUTHORIZED'
-    });
+    return res.apiError('Not authorized', 'UNAUTHORIZED');
   }
 
   try {
@@ -51,11 +47,10 @@ export const updateUserProfile = asyncHandler(async (req: Request, res: Response
       }
     });
   } catch (error: any) {
-    return res.status(400).json({
-      status: 0,
-      message: error.message || 'Failed to update profile',
-      error: error.code || 'UPDATE_PROFILE_FAILED'
-    });
+    return res.apiError(
+      error.message || 'Failed to update profile',
+      error.code || 'UPDATE_PROFILE_FAILED'
+    );
   }
 });
 
@@ -69,11 +64,7 @@ export const getUserProfile = asyncHandler(async (req: Request, res: Response) =
   const user = await User.findById(req.user?._id).select('-password -resetToken -resetTokenExpires -__v');
 
   if (!user) {
-    return res.status(200).json({
-      status: 0,
-      message: 'User not found',
-      error: 'USER_NOT_FOUND'
-    });
+    return res.apiError('User not found', 'USER_NOT_FOUND');
   }
 
   // Format the response with all stats fields

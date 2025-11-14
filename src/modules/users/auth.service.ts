@@ -4,25 +4,11 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { AppError } from '../../utils/appError';
 import User, { IUser } from './user.model';
+import { AuthResponse } from './types/user.types';
+import { AuthResponse } from './types';
 import { sendPasswordResetEmail } from '../../services/email.service';
 
 const SALT_ROUNDS = 10;
-
-interface AuthResponse {
-  id: string;
-  username: string;
-  firstName: string;
-  lastName?: string;
-  email: string;
-  avatar?: string;
-  role: 'player' | 'admin';
-  stats: {
-    gamesPlayed: number;
-    accuracy: number;
-    bestScore: number;
-  };
-  token: string;
-}
 
 const generateToken = (user: IUser): string => {
   try {
@@ -275,7 +261,7 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
   console.log(`${logPrefix} [1/7] Starting password reset for email:`, email);
   
   // Timeout for the entire operation (25 seconds)
-  const operationTimeout = 60000000;
+  const operationTimeout = 25000;
   let timeoutId: NodeJS.Timeout | null = null;
   
   const handleError = (error: any, defaultMessage: string) => {
@@ -497,24 +483,6 @@ export const setPassword = async (userId: string, newPassword: string): Promise<
       message: 'Password set successfully. You can now log in with your email and password.' 
     };
   } catch (error) {
-    console.error('Set password error:', error);
-    return { success: 0, message: 'An error occurred while setting password.' };
-  }
-};
-
-export const updateProfile = async (userId: string, updateData: { 
-  firstName?: string; 
-  lastName?: string; 
-  email?: string;
-}): Promise<AuthResponse> => {
-  // Find the user by ID
-  const user = await User.findById(userId);
-  if (!user) {
-    throw new Error('User not found');
-  }
-
-  // Check if email is being updated and if it already exists
-  if (updateData.email && updateData.email !== user.email) {
     const emailExists = await User.findOne({ email: updateData.email });
     if (emailExists) {
       throw new AppError('Email already in use', 409);
@@ -533,6 +501,7 @@ export const updateProfile = async (userId: string, updateData: {
   if (updateData.firstName) user.firstName = updateData.firstName;
   if (updateData.lastName) user.lastName = updateData.lastName;
   if (updateData.email) user.email = updateData.email;
+  if (updateData.username) user.username = updateData.username;
 
   // Save the updated user
   const updatedUser = await user.save();
@@ -542,12 +511,22 @@ export const updateProfile = async (userId: string, updateData: {
   
   // Return the updated user data and token
   return {
-    id: updatedUser._id,
+    id: updatedUser._id.toString(),
     username: updatedUser.username,
     email: updatedUser.email,
     firstName: updatedUser.firstName,
     lastName: updatedUser.lastName,
-  
+    role: updatedUser.role as 'player' | 'admin',
+    stats: {
+      gamesPlayed: updatedUser.stats?.gamesPlayed || 0,
+      accuracy: updatedUser.stats?.accuracy || 0,
+      bestScore: updatedUser.stats?.bestScore || 0,
+    },
+    gamesPlayed: updatedUser.stats?.gamesPlayed || 0,
+    accuracy: updatedUser.stats?.accuracy || 0,
+    bestScore: updatedUser.stats?.bestScore || 0,
+    token: token,
+    avatar: updatedUser.avatar
   };
 };
 
@@ -582,8 +561,8 @@ export const resetPassword = async (token: string, newPassword: string): Promise
   try {
     // 1. Find user by reset token and check if token is not expired
     const user = await User.findOne({
-      resetToken: token,
-      resetTokenExpires: { $gt: new Date() }
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: new Date() }
     });
 
     if (!user) {
@@ -596,8 +575,8 @@ export const resetPassword = async (token: string, newPassword: string): Promise
     // 2. Update password
     // Just set the plain password - the pre-save hook will handle hashing it
     user.password = newPassword;
-    user.resetToken = undefined;
-    user.resetTokenExpires = undefined;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
     
     // This will trigger the pre-save hook to hash the password
     await user.save();
@@ -620,3 +599,8 @@ export const resetPassword = async (token: string, newPassword: string): Promise
     throw error;
   }
 }
+
+export {
+  generateToken,
+  formatUserResponse
+};

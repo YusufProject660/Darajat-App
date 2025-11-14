@@ -19,6 +19,7 @@ import profileRoutes from './modules/users/routes/profile.routes';
 import gameRoutes from './modules/games/game.routes';
 import dashboardRoutes from './modules/dashboard/dashboard.routes';
 import { initializeSocket } from './modules/games/services/socket.service';
+import { gameService } from './modules/games/services/game.service';
 import { errorMiddleware, notFoundHandler } from './middlewares/error.middleware';
 import { AppError } from './utils/appError';
 import { responseFormatter } from './middlewares/responseFormatter';
@@ -95,15 +96,6 @@ export class App {
       return this.server;
     }
 
-    // Initialize email transporter early
-    try {
-      await initializeTransporter();
-      logger.info('✅ Email transporter initialized successfully');
-    } catch (error) {
-      logger.warn('⚠️ Failed to initialize email transporter. Email functionality may be limited.');
-      logger.error('Email transporter error:', error);
-    }
-
     try {
       await this.initializeDatabase();
 
@@ -120,10 +112,6 @@ export class App {
         logger.info('🧪 Test environment detected — created test server on random port');
       }
 
-      // Add health check route
-      this.app.get('/health', (_req: Request, res: Response) => {
-        res.status(200).json({ status: 'ok' });
-      });
 
       this.isInitialized = true;
       const address = this.server.address();
@@ -138,6 +126,34 @@ export class App {
   }
 
   private initializeMiddlewares() {
+    // Add raw body parser first for specific routes
+    this.app.use((req, res, next) => {
+      // Only process for specific paths that need raw body
+      if (req.path.includes('/api/auth/')) {
+        const chunks: Buffer[] = [];
+        
+        req.on('data', (chunk) => {
+          chunks.push(chunk);
+        });
+        
+        req.on('end', () => {
+          if (chunks.length > 0) {
+            const rawBody = Buffer.concat(chunks).toString('utf8');
+            (req as any).rawBody = rawBody;
+            try {
+              req.body = JSON.parse(rawBody);
+            } catch (e) {
+              console.log('Could not parse body as JSON');
+            }
+          }
+          next();
+        });
+      } else {
+        // For other routes, use the standard JSON parser
+        express.json()(req, res, next);
+      }
+    });
+
     // Add request timeout middleware (30 seconds)
     this.app.use((req, res, next) => {
       const timeout = 30000; // 30 seconds
@@ -180,75 +196,140 @@ export class App {
     // Body parsing middleware for URL-encoded data
     this.app.use(express.urlencoded({ extended: true }));
     
-    // Log request body after it's been parsed
-    this.app.use((req, res, next) => {
-      if (req.body && Object.keys(req.body).length > 0) {
-        console.log('Request body:', req.body);
-      }
-      next();
-    });
+    // Development-only request logging middleware
+    if (process.env.NODE_ENV === 'development') {
+      this.app.use((req, res, next) => {
+        // Skip logging for health checks and static files
+        if (req.path === '/health' || req.path.startsWith('/static/')) {
+          return next();
+        }
+
+        const start = Date.now();
+        const originalEnd = res.end;
+        
+        // @ts-ignore - We're extending the response object
+        res.end = function (chunk, encoding) {
+          const duration = Date.now() - start;
+          
+          // Clone and sanitize request body for logging
+          let logData: any = {
+            method: req.method,
+            path: req.path,
+            statusCode: res.statusCode,
+            duration: `${duration}ms`
+          };
+
+          // Only log request body for non-GET requests and if body exists
+          if (req.method !== 'GET' && req.body && Object.keys(req.body).length > 0) {
+            const sensitiveFields = ['password', 'token', 'refreshToken', 'accessToken', 'authorization'];
+            const sanitizedBody = JSON.parse(JSON.stringify(req.body));
+            
+            // Redact sensitive fields
+            sensitiveFields.forEach(field => {
+              if (sanitizedBody[field]) {
+                sanitizedBody[field] = '[REDACTED]';
+              }
+            });
+            
+            logData.body = sanitizedBody;
+          }
+
+          console.debug('Request:', logData);
+          
+          // Call original end method
+          return originalEnd.call(this, chunk, encoding);
+        };
+        
+        next();
+      });
+    }
     
-    // Serve static files from the public directory - this needs to be before other middlewares
+    // Serve static files from the public directory
     const publicDir = path.join(__dirname, '../../public');
-    console.log(`Serving static files from: ${publicDir}`);
+    if (process.env.NODE_ENV === 'development') {
+      console.debug(`Serving static files from: ${publicDir}`);
+    }
     this.app.use(express.static(publicDir));
-    
-    // Add body parser for JSON
-    this.app.use(express.json());
-    this.app.use(express.urlencoded({ extended: true }));
     
     // Add morgan logging
     this.app.use(morgan('combined', { stream }));
     
-    // Add raw body parser for specific routes
-    this.app.use(['/api/auth/forgot-password', '/api/auth/reset-password'], (req, res, next) => {
-      const chunks: Buffer[] = [];
-      
-      req.on('data', (chunk) => {
-        chunks.push(chunk);
-      });
-      
-      req.on('end', () => {
-        if (chunks.length > 0) {
-          const rawBody = Buffer.concat(chunks).toString('utf8');
-          (req as any).rawBody = rawBody;
-          try {
-            req.body = JSON.parse(rawBody);
-          } catch (e) {
-            console.log('Could not parse body as JSON');
-          }
-        }
-        next();
-      });
-    });
-
-    const allowedOrigins = [
+    // Default development origins
+    const devOrigins = [
       'http://127.0.0.1:5500',
       'http://localhost:5500',
       'http://localhost:3000',
       'http://localhost:5173',
+      'http://localhost:8000',
+      'http://localhost:8080',
+      /^https?:\/\/localhost(:\d+)?$/, // Match any localhost with any port
+    ];
+
+    // Production origins from config and environment
+    const productionOrigins = [
       config.clientUrl,
-      config.frontendUrl
+      config.frontendUrl,
+      process.env.FRONTEND_URL,
+      process.env.CLIENT_URL,
+      // Add common production domains here if needed
     ].filter(Boolean) as string[];
+
+    // Combine origins based on environment
+    const allowedOrigins = process.env.NODE_ENV === 'production' 
+      ? productionOrigins
+      : [...devOrigins, ...productionOrigins];
 
     const corsOptions = {
       origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
+        // Allow requests with no origin (like mobile apps, curl, etc)
+        if (!origin) {
+          if (process.env.NODE_ENV === 'production') {
+            logger.debug('Request with no origin - allowing in production');
+          }
+          return callback(null, true);
+        }
 
-        const error = new Error(`Origin ${origin} not allowed by CORS`);
-        logger.warn(error.message);
+        // Check if origin matches any allowed pattern
+        const isAllowed = allowedOrigins.some(allowedOrigin => {
+          if (typeof allowedOrigin === 'string') {
+            return origin === allowedOrigin;
+          } else if (allowedOrigin instanceof RegExp) {
+            return allowedOrigin.test(origin);
+          }
+          return false;
+        });
+
+        if (isAllowed) {
+          return callback(null, true);
+        }
+
+        const error = new Error(`Origin '${origin}' not allowed by CORS`);
+        logger.warn(`CORS violation: ${error.message}. Allowed origins: ${JSON.stringify(allowedOrigins)}`);
+        
+        // In development, allow all origins but log a warning
+        if (process.env.NODE_ENV !== 'production') {
+          logger.warn(`Allowing origin '${origin}' in development mode`);
+          return callback(null, true);
+        }
+        
         return callback(error, false);
       },
       credentials: true,
       optionsSuccessStatus: 200,
-      allowedHeaders: ['Content-Type', 'Authorization'],
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+      allowedHeaders: [
+        'Content-Type', 
+        'Authorization', 
+        'X-Requested-With',
+        'Accept',
+        'X-Access-Token',
+        'X-Refresh-Token'
+      ],
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      exposedHeaders: ['Content-Range', 'X-Total-Count']
     };
 
     this.app.use(cors(corsOptions));
     this.app.set('trust proxy', 1);
-    this.app.use(express.json());
     
     // Middleware to preserve empty strings in request body
     this.app.use((req, res, next) => {
@@ -319,9 +400,15 @@ export class App {
   }
 
   private initializeRoutes(): void {
-    // Health check route
-    this.app.get('/health', (_req: Request, res: Response) => {
-      res.status(200).json({ status: 'ok' });
+    // Health check endpoint
+    this.app.get('/health', (_req, res) => {
+      res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        environment: process.env.NODE_ENV || 'development',
+        version: process.env.npm_package_version || '1.0.0'
+      });
     });
 
     // API routes
@@ -341,13 +428,13 @@ export class App {
         if (status && status !== 'all') filter.status = status;
         if (category && category !== 'all') filter.category = category;
 
-        res.json({
-          success: true,
-          data: { filter, message: 'Endpoint working. Implement database query here.' }
-        });
+        res.apiSuccess(
+          { filter, message: 'Endpoint working. Implement database query here.' },
+          'Decks endpoint working'
+        );
       } catch (error) {
         logger.error('Error in /api/decks:', error);
-        res.status(500).json({ success: false, message: 'Error fetching decks' });
+        res.apiError('Error fetching decks', 'FETCH_DECKS_ERROR');
       }
     });
   }
@@ -381,25 +468,6 @@ export class App {
         }
       });
     }
-
-    // Example decks endpoint
-    this.app.get('/api/decks', async (req: Request, res: Response) => {
-      try {
-        const { category, status } = req.query as { category?: string; status?: string };
-        const filter: { status: string; category?: string } = { status: 'active' };
-
-        if (status && status !== 'all') filter.status = status;
-        if (category && category !== 'all') filter.category = category;
-
-        res.json({
-          success: true,
-          data: { filter, message: 'Endpoint working. Implement database query here.' }
-        });
-      } catch (error) {
-        logger.error('Error in /api/decks:', error);
-        res.status(500).json({ success: false, message: 'Error fetching decks' });
-      }
-    });
   }
 
   private initializeSocketIO() {
@@ -410,7 +478,7 @@ export class App {
       this.io = new SocketIOServer(this.server, {
         cors: {
           origin: process.env.NODE_ENV === 'production' 
-            ? ['https://your-production-domain.com'] 
+            ? process.env.FRONTEND_URL || 'https://your-production-domain.com'
             : '*',
           methods: ['GET', 'POST'],
           credentials: true
@@ -419,7 +487,6 @@ export class App {
         maxHttpBufferSize: 1e8, // 100MB
         connectTimeout: 30000,  // 30 seconds
         transports: ['websocket', 'polling'],
-        // These are the correct properties for Socket.IO v4
         pingInterval: 30000,   // 30 seconds
         pingTimeout: 60000,    // 60 seconds
         // @ts-ignore - The types might be outdated, but these properties are valid in v4
@@ -427,7 +494,14 @@ export class App {
       });
 
       // Initialize socket service with the server and io instance
-      initializeSocket(this.server, this.io);
+      const socketService = initializeSocket(this.server, this.io);
+      
+      // Pass the socket service to game service
+      if (socketService) {
+        gameService.initialize(this.io);
+        logger.info('✅ Socket.IO server initialized with game service');
+      }
+      
       logger.info('✅ WebSocket server initialized');
 
     } catch (error) {
@@ -444,5 +518,4 @@ export class App {
   }
 }
 
-const app = new App();
-export default app;
+// App class is exported for use in index.ts

@@ -12,12 +12,16 @@ export interface Player {
 
 export interface Question {
   id: string;
-  text: string;
+  question: string;
   options: string[];
-  correctAnswer: string;
+  correctAnswer: number;
   timeLimit: number; // in seconds
   category?: string;
   difficulty?: 'easy' | 'medium' | 'hard';
+  explanation?: string;
+  source?: string;
+  deckId?: string;
+  deck?: string;
 }
 
 export interface GameRoom {
@@ -69,37 +73,128 @@ export interface GameState {
 
 // WebSocket event types
 export interface ClientEvents {
-  // Client to Server
-  'join_room': (data: { roomCode: string; playerName: string; isHost?: boolean }, callback?: (response: { success: boolean; room?: any; player?: any; error?: string }) => void) => void;
-  'start_game': () => void;
-  'submit_answer': (data: { answer: string }) => void;
-  'next_question': () => void;
-  'end_game': () => void;
-  'player_ready': (data: { isReady: boolean }) => void;
+  // Room Events
+  'room:join': (data: { roomCode: string; playerName: string; isHost?: boolean }, callback?: (response: { success: boolean; room?: any; player?: any; error?: string }) => void) => void;
+  'room:leave': () => void;
+  
+  // Game Events
+  'game:start': () => void;
+  'game:end': () => void;
+  'game:pause': () => void;
+  'game:resume': () => void;
+  
+  // Player Actions
+  'player:ready': (data: { isReady: boolean }) => void;
+  'answer:submit': (data: { answer: string }) => void;
+  'question:next': () => void;
+  
+  // Chat
+  'chat:send': (data: { message: string }) => void;
+  
+  // System
   'disconnect': () => void;
-  'send_message': (data: { message: string }) => void;
 }
 
 export interface ServerEvents {
-  // Server to Client
-  'room_joined': (data: { room: GameRoom; player: Player }) => void;
-  'player_joined': (data: { players: Player[] }) => void;
-  'player_left': (data: { playerId: string; players: Player[] }) => void;
-  'game_started': (data: { firstQuestion: Question; timeLimit: number }) => void;
-  'new_question': (data: { question: Question; questionIndex: number; totalQuestions: number }) => void;
-  'time_update': (data: { timeRemaining: number }) => void;
-  'answer_result': (data: { isCorrect: boolean; correctAnswer: string; score: number }) => void;
-  'leaderboard_update': (data: { leaderboard: Array<{ id: string; name: string; score: number }> }) => void;
-  'game_ended': (data: { leaderboard: Array<{ id: string; name: string; score: number }> }) => void;
-  'error': (data: { message: string }) => void;
-  'chat_message': (data: { sender: string; message: string; timestamp: string }) => void;
+  // Room Events
+  'room:joined': (data: { room: GameRoom; player: Player }) => void;
+  'room:updated': (data: { room: GameRoom }) => void;
+  'room:left': () => void;
+  
+  // Player Events
+  'player:joined': (data: { player: Player; players: Player[] }) => void;
+  'player:left': (data: { playerId: string; players: Player[]; newHostId?: string }) => void;
+  'player:disconnected': (data: { playerId: string; reason?: string }) => void;
+  'player:ready': (data: { playerId: string; isReady: boolean }) => void;
+  
+  // Game Events
+  'game:started': (data: { firstQuestion: Question; timeLimit: number }) => void;
+  'game:ended': (data: { 
+    leaderboard: Array<{ 
+      id: string; 
+      name: string; 
+      score: number; 
+      isHost: boolean;
+    }>;
+    totalQuestions: number;
+    players: Array<{
+      id: string;
+      username: string;
+      score: number;
+      isHost: boolean;
+    }>;
+  }) => void;
+  'game:paused': () => void;
+  'game:resumed': () => void;
+  
+  // Question Events
+  'question:new': (data: { 
+    question: Question; 
+    questionIndex: number; 
+    totalQuestions: number;
+    timeLimit: number;
+  }) => void;
+  'question:timeout': () => void;
+  'question:answered': (data: { 
+    playerId: string;
+    isCorrect: boolean; 
+    correctAnswer: string; 
+    score: number;
+  }) => void;
+  
+  // Leaderboard Events
+  'leaderboard:updated': (data: { 
+    leaderboard: Array<{ 
+      id: string; 
+      name: string; 
+      score: number;
+      isHost: boolean;
+    }> 
+  }) => void;
+  
+  // Chat Events
+  'chat:message': (data: { 
+    sender: string; 
+    message: string; 
+    timestamp: string;
+    playerId: string;
+  }) => void;
+  
+  // Error Events
+  'error:general': (data: { 
+    code: string;
+    message: string;
+    details?: any;
+  }) => void;
+  
+  'error:validation': (data: {
+    field: string;
+    message: string;
+    code: string;
+  }) => void;
+  
+  'error:game': (data: {
+    code: string;
+    message: string;
+    recoverable: boolean;
+  }) => void;
 }
 
 export interface InterServerEvents {
   ping: () => void;
 }
 
+export interface SocketUser {
+  id: string;
+  username: string;
+  avatar?: string;
+  isHost?: boolean;
+}
+
 export interface SocketData {
   playerId: string;
   roomCode: string;
+  user: SocketUser;
+  socketId?: string;
+  joinedAt?: number;
 }

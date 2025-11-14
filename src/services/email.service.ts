@@ -17,19 +17,9 @@ const emailConfig = {
   connectionTimeout: 10000,
   greetingTimeout: 10000,
   socketTimeout: 10000,
-  debug: process.env.NODE_ENV !== 'production',
-  logger: process.env.NODE_ENV !== 'production'
+  debug: false,
+  logger: false
 };
-
-// Log the email configuration (without the password)
-console.log('📧 Email configuration:', {
-  service: emailConfig.service,
-  host: emailConfig.host,
-  port: emailConfig.port,
-  secure: emailConfig.secure,
-  user: emailConfig.auth.user ? `${emailConfig.auth.user.substring(0, 3)}...@...` : 'not set',
-  hasPassword: !!emailConfig.auth.pass
-});
 
 // Logging function for important email events
 const log = (message: string, data?: any) => {

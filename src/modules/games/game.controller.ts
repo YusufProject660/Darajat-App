@@ -199,10 +199,7 @@ interface IGameLobbyRequest extends Request {
 
     if (enabledCategories.length === 0) {
       logger.error('[createGame] 400: no enabled categories after processing');
-      return res.status(200).json({
-        status: 'error',
-        message: 'At least one category must be enabled'
-      });
+      return res.apiError('At least one category must be enabled', 'NO_CATEGORIES_ENABLED');
     }
 
     // Get questions for the selected categories
@@ -476,10 +473,7 @@ interface ISubmitAnswerRequest extends Request {
     const { roomCode } = req.params;
 
     if (!req.user) {
-      return res.status(401).json({
-        status: 'error',
-        message: 'User not authenticated'
-      });
+      return res.apiError('User not authenticated', 'UNAUTHORIZED');
     }
 
     // Find the game room first
@@ -525,7 +519,7 @@ interface ISubmitAnswerRequest extends Request {
       
       return {
         _id: q._id,
-        questionText: q.question || 'No question text available',
+        question: q.question || 'No question available',
         options: q.options || [],
         difficulty: q.difficulty || 'medium',
         category: q.category || 'General',
@@ -567,12 +561,12 @@ const getGameSummary = async (req: Request, res: Response, next: NextFunction) =
     const gameRoom = await GameRoom.findOne({ roomCode })
       .populate({
         path: 'questions',
-        select: 'text question options correctAnswer explanation category difficulty',
+        select: 'question options correctAnswer explanation category difficulty',
         options: { sort: { _id: 1 } },
       })
       .populate({
         path: 'answeredQuestions.questionId',
-        select: 'text question options correctAnswer explanation'
+        select: 'question options correctAnswer explanation'
       })
       .lean() as any;
 
@@ -624,7 +618,7 @@ const getGameSummary = async (req: Request, res: Response, next: NextFunction) =
       
       const questionId = q._id.toString();
       const answer = userAnswers[questionId];
-      const questionText = q.text || q.question || 'Question not found';
+      const questionText = q.question || 'Question not found';
       const options = Array.isArray(q.options) ? q.options : [];
       
       // Handle correct answer
@@ -696,6 +690,18 @@ const getGameSummary = async (req: Request, res: Response, next: NextFunction) =
     );
   }
 };
+
+// Player statistics interface
+interface PlayerStats {
+  userId: mongoose.Types.ObjectId;
+  username: string;
+  avatar?: string;
+  points: number;
+  accuracy: number;
+  averageTime: number;
+  correctAnswers: number;
+  totalQuestionsAnswered: number;
+}
 
 // Interface for game leaderboard request
 interface IGameLeaderboardRequest extends Request {
@@ -866,11 +872,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
     // Input validation
     if (!roomCode || typeof roomCode !== 'string' || roomCode.trim() === '') {
       logger.warn('Invalid room code provided');
-      return res.status(200).json({
-        status: 0,
-        message: 'Room code is required',
-        error: 'INVALID_ROOM_CODE'
-      });
+      return res.apiError('Room code is required', 'INVALID_ROOM_CODE');
     }
 
     // Find the game room with case-insensitive search
@@ -882,30 +884,19 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
 
     if (!gameRoom) {
       logger.warn(`Game room not found: ${roomCode}`);
-      return res.status(200).json({
-        status: 0,
-        message: 'Game not found',
-        error: 'GAME_NOT_FOUND'
-      });
+      return res.apiError('Game not found', 'GAME_NOT_FOUND');
     }
 
     // Check game status
     if (gameRoom.status === 'finished' || gameRoom.status === 'completed') {
       logger.warn(`Game already finished: ${roomCode}`);
-      return res.status(200).json({
-        status: 0,
-        message: 'Game is already finished',
-        error: 'GAME_ALREADY_FINISHED'
-      });
+      return res.apiError('Game is already finished', 'GAME_ALREADY_FINISHED');
     }
 
     // Additional validation - check if game has started
     if (gameRoom.status !== 'active') {
       logger.warn(`Game not in finishable state: ${roomCode}, status: ${gameRoom.status}`);
-      return res.status(200).json({
-        status: 0,
-        message: 'Game is not in a finishable state',
-        error: 'INVALID_GAME_STATE',
+      return res.apiError('Game is not in a finishable state', 'INVALID_GAME_STATE', {
         currentStatus: gameRoom.status
       });
     }
@@ -1065,12 +1056,11 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
     
     // Return appropriate error response
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return res.status(500).json({ 
-      status: 0, 
-      message: 'Failed to finish game',
-      error: 'FINISH_GAME_ERROR',
-      details: process.env.NODE_ENV === 'development' ? errorMessage : undefined
-    });
+    return res.apiError(
+      'Failed to finish game',
+      'FINISH_GAME_ERROR',
+      process.env.NODE_ENV === 'development' ? { details: errorMessage } : undefined
+    );
   } finally {
     // End the session
     session.endSession();
@@ -1084,10 +1074,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
     const userId = req.user?._id;
 
     if (!userId) {
-      return res.status(401).json({
-        status: 'error',
-        message: 'User not authenticated'
-      });
+      return res.apiError('User not authenticated', 'UNAUTHORIZED');
     }
 
     const session = await mongoose.startSession();
@@ -1098,10 +1085,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       
       if (!gameRoom) {
         await session.abortTransaction();
-        return res.status(404).json({
-          status: 'error',
-          message: 'Game room not found'
-        });
+        return res.apiError('Game room not found', 'ROOM_NOT_FOUND');
       }
 
       // Remove player from the game
@@ -1111,10 +1095,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
 
       if (playerIndex === -1) {
         await session.abortTransaction();
-        return res.status(400).json({
-          status: 'error',
-          message: 'You are not in this game'
-        });
+        return res.apiError('You are not in this game', 'NOT_IN_GAME');
       }
 
       // If host is leaving, assign new host or end game
@@ -1142,10 +1123,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       await gameRoom.save({ session });
       await session.commitTransaction();
 
-      return res.status(200).json({
-        status: 'success',
-        message: 'Successfully left the game',
-      });
+      return res.apiSuccess({}, 'Successfully left the game');
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -1153,10 +1131,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       session.endSession();
     }
   } catch (error) {
-    return res.status(500).json({
-      status: 'error',
-      message: 'Failed to leave game'
-    });
+    return res.apiError('Failed to leave game', 'LEAVE_GAME_ERROR');
   }
 };
 
@@ -1167,10 +1142,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
     const userId = req.user?._id;
 
     if (!userId) {
-      return res.status(401).json({
-        status: 'error',
-        message: 'User not authenticated'
-      });
+      return res.apiError('User not authenticated', 'UNAUTHORIZED');
     }
 
     try {
@@ -1280,11 +1252,7 @@ const startGame = async (req: Request, res: Response, next: NextFunction) => {
     // Find the game room
     const game = await GameRoom.findOne({ roomCode });
     if (!game) {
-      return res.status(200).json({
-        status: 0,
-        message: 'Game room not found',
-        data: {}
-      });
+      return res.apiError('Game room not found', 'ROOM_NOT_FOUND');
     }
 
     // Check if the user is the host
@@ -1293,29 +1261,18 @@ const startGame = async (req: Request, res: Response, next: NextFunction) => {
     );
 
     if (!isHost) {
-      return res.status(200).json({
-        status: 0,
-        message: 'Only the host can start the game',
-        data: {}
-      });
+      return res.apiError('Only the host can start the game', 'NOT_HOST');
     }
 
     // Check if all players are ready
     const allPlayersReady = game.players.every(player => player.isReady || player.isHost);
     if (!allPlayersReady) {
-      return res.status(200).json({
-        status: 0,
-        message: 'All players must be ready before starting the game'
-      });
+      return res.apiError('All players must be ready before starting the game', 'PLAYERS_NOT_READY');
     }
 
     // Check if there are at least 2 players
     if (game.players.length < 2) {
-      return res.status(200).json({
-        status: 0,
-        message: 'At least 2 players are required to start the game',
-        data: {}
-      });
+      return res.apiError('At least 2 players are required to start the game', 'INSUFFICIENT_PLAYERS');
     }
 
     logger.info(`Starting game for room: ${game.roomCode}, user: ${userId}`);
@@ -1339,7 +1296,7 @@ const startGame = async (req: Request, res: Response, next: NextFunction) => {
     const firstQuestion = updatedGame.questions?.[0] 
       ? {
           _id: updatedGame.questions[0]._id?.toString(),
-          questionText: updatedGame.questions[0].questionText,
+          question: updatedGame.questions[0].question,
           options: updatedGame.questions[0].options,
           category: updatedGame.questions[0].category,
           difficulty: updatedGame.questions[0].difficulty,
@@ -1687,10 +1644,7 @@ export const getMyGames = async (req: IGetMyGamesRequest, res: Response) => {
     });
   } catch (error) {
     console.error('Error fetching user games:', error);
-    return res.status(500).json({
-      status: 0,
-      message: "Something went wrong"
-    });
+    return res.apiError('Something went wrong', 'FETCH_GAMES_ERROR');
   }
 };
 

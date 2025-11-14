@@ -1,7 +1,7 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IQuestion extends Document {
-  text: string;
+  question: string;
   options: string[];
   correctAnswer: number;
   explanation: string;
@@ -13,7 +13,7 @@ export interface IQuestion extends Document {
 }
 
 const questionSchema = new Schema<IQuestion>({
-  text: { type: String, required: true, trim: true },
+  question: { type: String, required: true, trim: true },
   options: { 
     type: [String], 
     required: true,

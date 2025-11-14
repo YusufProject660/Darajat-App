@@ -131,10 +131,8 @@ router.get('/summary/:roomCode', protect, getGameSummary);
  * @desc    Get the leaderboard for a completed game
  * @access  Private
  */
-router.get('/leaderboard/:roomCode', protect, getGameLeaderboard);
-
 /**
- * @route   PATCH /api/games/finish/:roomCode
+ * @route   PATCH /api/game/finish/:roomCode
  * @desc    Finish a game and update player stats
  * @access  Private
  */
@@ -197,12 +195,6 @@ router.route('/settings/:roomCode')
   .patch(validatePatchMethod, protect, isHost, updateGameSettings)
   .all(methodNotAllowed);
 
-/**
- * @route   GET /api/game/summary/:roomCode
- * @desc    Get game summary for the logged-in user
- * @access  Private
- */
-router.get('/summary/:roomCode', protect, getGameSummary);
 
 /**
  * @route   GET /api/game/leaderboard/:roomCode

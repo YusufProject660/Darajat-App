@@ -1,10 +1,7 @@
-import dotenv from 'dotenv';
 import { App } from './app';
 import http from 'http';
 import mongoose from 'mongoose';
-
-// Load environment variables
-dotenv.config();
+import './config/env'; // Import env configuration
 
 // Create the app
 const app = new App();
@@ -50,7 +47,7 @@ function setupShutdownHandlers(server: http.Server): void {
       });
       
       // Close database connection if exists
-      if ((app as any).dbConnection) {
+      if (mongoose.connection.readyState === 1) { // 1 = connected
         await mongoose.connection.close();
         console.log('✅ Database connection closed');
       }
