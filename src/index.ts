@@ -2,6 +2,7 @@ import { App } from './app';
 import http from 'http';
 import mongoose from 'mongoose';
 import './config/env'; // Import env configuration
+import { logger } from './utils/logger';
 
 // Create the app
 const app = new App();
@@ -11,7 +12,7 @@ const app = new App();
  */
 async function startServer(): Promise<http.Server> {
   try {
-    console.log('🚀 Starting server...');
+    logger.info('🚀 Starting server...');
     
     // Initialize the application
     const server = await app.initialize();
@@ -21,7 +22,7 @@ async function startServer(): Promise<http.Server> {
     
     return server;
   } catch (error) {
-    console.error('❌ Failed to start server:', error);
+    logger.error('❌ Failed to start server:', error);
     process.exit(1);
   }
 }
@@ -31,17 +32,17 @@ async function startServer(): Promise<http.Server> {
  */
 function setupShutdownHandlers(server: http.Server): void {
   const shutdown = async (signal: string) => {
-    console.log(`\n📴 Received ${signal}. Shutting down gracefully...`);
+    logger.info(`\n📴 Received ${signal}. Shutting down gracefully...`);
     
     try {
       // Close the server
       await new Promise<void>((resolve, reject) => {
         server.close(err => {
           if (err) {
-            console.error('Error during server shutdown:', err);
+            logger.error('Error during server shutdown:', err);
             return reject(err);
           }
-          console.log('✅ HTTP server closed');
+          logger.info('✅ HTTP server closed');
           resolve();
         });
       });
@@ -49,13 +50,13 @@ function setupShutdownHandlers(server: http.Server): void {
       // Close database connection if exists
       if (mongoose.connection.readyState === 1) { // 1 = connected
         await mongoose.connection.close();
-        console.log('✅ Database connection closed');
+        logger.info('✅ Database connection closed');
       }
       
-      console.log('👋 Shutdown complete');
+      logger.info('👋 Shutdown complete');
       process.exit(0);
     } catch (error) {
-      console.error('❌ Error during shutdown:', error);
+      logger.error('❌ Error during shutdown:', error);
       process.exit(1);
     }
   };
@@ -66,19 +67,19 @@ function setupShutdownHandlers(server: http.Server): void {
   
   // Handle uncaught exceptions
   process.on('uncaughtException', (error) => {
-    console.error('🚨 Uncaught Exception:', error);
+    logger.error('🚨 Uncaught Exception:', error);
     shutdown('uncaughtException');
   });
   
   // Handle unhandled promise rejections
   process.on('unhandledRejection', (reason, promise) => {
-    console.error('🚨 Unhandled Rejection at:', promise, 'reason:', reason);
+    logger.error('🚨 Unhandled Rejection at:', promise, 'reason:', reason);
     shutdown('unhandledRejection');
   });
 }
 
 // Start the server
 startServer().catch(error => {
-  console.error('❌ Fatal error during startup:', error);
+  logger.error('❌ Fatal error during startup:', error);
   process.exit(1);
 });

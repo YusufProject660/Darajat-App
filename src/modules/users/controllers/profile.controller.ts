@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
-import asyncHandler from '../../middleware/async';
+import asyncHandler from '../../../middlewares/async';
 import User from '../user.model';
-import { upload } from '../../../middlewares/upload';
 import { updateProfile, formatUserResponse, generateToken } from '../auth.service';
 import fs from 'fs-extra';
 import path from 'path';
@@ -31,8 +30,8 @@ export const updateUserProfile = asyncHandler(async (req: Request, res: Response
     });
 
     // Generate new token with updated user data
-    const token = generateToken(updatedUser);
-    const userResponse = formatUserResponse(updatedUser, token);
+    const token = generateToken(updatedUser as any);
+    const userResponse = formatUserResponse(updatedUser as any, token);
     
     return res.status(200).json({
       status: 1,

@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { validationResult } from 'express-validator';
+import { logger } from '../utils/logger';
 
 // Wraps async/await route handlers to automatically catch errors
-type AsyncFunction = (req: Request, res: Response, next: NextFunction) => Promise<any>;
+type AsyncFunction = (req: any, res: Response, next: NextFunction) => Promise<any>;
 
 // Keep the original asyncHandler for backward compatibility
 export const asyncHandler = (fn: AsyncFunction) => 
@@ -12,47 +13,51 @@ export const asyncHandler = (fn: AsyncFunction) =>
 
 // Enhanced error handler with consistent response format
 export const asyncHandlerWithErrorHandling = (fn: AsyncFunction) => 
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void | Response> => {
     try {
       // Check for validation errors from express-validator
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         const errorMessages = errors.array().map(err => err.msg);
-        return res.status(200).json({
+        res.status(200).json({
           status: 0,
           message: errorMessages[0] || 'Validation failed'
         });
+        return;
       }
 
       // If no validation errors, proceed with the request
       await fn(req, res, next);
     } catch (error: any) {
-      console.error('Request error:', error);
+      logger.error('Request error:', error);
       
       // Handle different types of errors
       if (error.name === 'ValidationError') {
         // Mongoose validation error
         const errorMessages = Object.values(error.errors).map((err: any) => err.message);
-        return res.status(200).json({
+        res.status(200).json({
           status: 0,
           message: errorMessages[0] || 'Validation failed'
         });
+        return;
       }
       
       if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-        return res.status(200).json({
+        res.status(200).json({
           status: 0,
           message: 'Invalid or expired token. Please log in again.'
         });
+        return;
       }
       
       if (error.code === 11000) {
         // MongoDB duplicate key error
         const field = Object.keys(error.keyValue || {})[0] || 'field';
-        return res.status(200).json({
+        res.status(200).json({
           status: 0,
           message: `${field} already exists`
         });
+        return;
       }
       
       // Default error response
@@ -64,3 +69,4 @@ export const asyncHandlerWithErrorHandling = (fn: AsyncFunction) =>
   };
 
 export default asyncHandler;
+

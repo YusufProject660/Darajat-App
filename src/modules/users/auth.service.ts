@@ -5,8 +5,8 @@ import bcrypt from 'bcrypt';
 import { AppError } from '../../utils/appError';
 import User, { IUser } from './user.model';
 import { AuthResponse } from './types/user.types';
-import { AuthResponse } from './types';
 import { sendPasswordResetEmail } from '../../services/email.service';
+import { logger } from '../../utils/logger';
 
 const SALT_ROUNDS = 10;
 
@@ -26,9 +26,6 @@ const generateToken = (user: IUser): string => {
       username: user.username
     };
 
-    // Log the payload for debugging
-    console.log('JWT Payload:', JSON.stringify(payload, null, 2));
-
     const token = jwt.sign(
       payload,
       config.jwtSecret,
@@ -37,13 +34,10 @@ const generateToken = (user: IUser): string => {
         algorithm: 'HS256'
       }
     );
-
-    // Log the generated token for debugging
-    console.log('Generated Token:', token);
     
     return token;
   } catch (error) {
-    console.error('Error generating token:', error);
+    logger.error('Error generating token:', error);
     throw new AppError('Failed to generate authentication token', 500);
   }
 };
@@ -63,7 +57,7 @@ const formatUserResponse = (user: IUser, token: string): AuthResponse => ({
   token
 });
 
-export const register = async (email: string, password: string, confirmPassword?: string, username?: string, fullname?: string): Promise<AuthResponse> => {
+export const register = async (email: string, password: string, _confirmPassword?: string, username?: string, fullname?: string): Promise<AuthResponse> => {
   // Check if user exists
   const existingUser = await User.findOne({ email });
   if (existingUser) {
@@ -258,7 +252,7 @@ interface ForgotPasswordResponse {
 
 export const forgotPassword = async (email: string): Promise<ForgotPasswordResponse> => {
   const logPrefix = '🔵 [FORGOT_PASSWORD]';
-  console.log(`${logPrefix} [1/7] Starting password reset for email:`, email);
+  logger.info(`${logPrefix} [1/7] Starting password reset for email:`, email);
   
   // Timeout for the entire operation (25 seconds)
   const operationTimeout = 25000;
@@ -266,7 +260,7 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
   
   const handleError = (error: any, defaultMessage: string) => {
     const err = error instanceof Error ? error : new Error(String(error));
-    console.error(`${logPrefix} [ERROR] ${err.message}`, {
+    logger.error(`${logPrefix} [ERROR] ${err.message}`, {
       stack: err.stack,
       timestamp: new Date().toISOString()
     });
@@ -283,7 +277,7 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
     const operationPromise = (async (): Promise<ForgotPasswordResponse> => {
       try {
         // 1. Find the user by email with a timeout
-        console.log(`${logPrefix} [2/7] Looking up user with email:`, email);
+        logger.debug(`${logPrefix} [2/7] Looking up user with email:`, email);
         
         // Race between the user lookup and a timeout
         const user = await Promise.race([
@@ -297,7 +291,7 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
         ]);
 
         if (!user) {
-          console.log(`${logPrefix} [3/7] No user found with email:`, email);
+          logger.info(`${logPrefix} [3/7] No user found with email:`, email);
           return {
             status: 0,
             message: 'If an account with this email exists, you will receive a password reset link.',
@@ -306,10 +300,11 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
         }
 
         // 2. Check if this is an OAuth user
-        if (user.isOAuthUser) {
-          console.log(`${logPrefix} [4/7] OAuth account detected:`, {
-            email: user.email,
-            provider: user.authProvider
+        let userDoc = Array.isArray(user) ? user[0] : user;
+        if (userDoc && (userDoc as any).isOAuthUser) {
+          logger.info(`${logPrefix} [4/7] OAuth account detected:`, {
+            email: (userDoc as any).email,
+            provider: (userDoc as any).authProvider
           });
           return {
             status: 0,
@@ -321,12 +316,11 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
         // 3. Check cooldown period (1 minute between requests)
         const COOLDOWN_PERIOD = 60 * 1000; // 1 minute
         const now = new Date();
-        
-        if (user.lastResetRequest) {
-          const timeSinceLastRequest = now.getTime() - new Date(user.lastResetRequest).getTime();
+        if (userDoc && (userDoc as any).lastResetRequest) {
+          const timeSinceLastRequest = now.getTime() - new Date((userDoc as any).lastResetRequest).getTime();
           if (timeSinceLastRequest < COOLDOWN_PERIOD) {
             const remainingTime = Math.ceil((COOLDOWN_PERIOD - timeSinceLastRequest) / 1000);
-            console.log(`${logPrefix} [5/7] Reset requested too soon. Please wait ${remainingTime} seconds.`);
+            logger.warn(`${logPrefix} [5/7] Reset requested too soon. Please wait ${remainingTime} seconds.`);
             return {
               status: 0,
               message: `Please wait ${remainingTime} seconds before requesting another reset link.`,
@@ -337,11 +331,12 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
         }
 
         // 4. Generate and save reset token
-        console.log(`${logPrefix} [6/7] Generating reset token...`);
+        logger.debug(`${logPrefix} [6/7] Generating reset token...`);
         const { token, expiresAt } = generateResetToken();
         
+        userDoc = Array.isArray(user) ? user[0] : user;
         await User.updateOne(
-          { _id: user._id },
+          { _id: (userDoc as any)._id },
           {
             $set: {
               resetPasswordToken: token,
@@ -352,16 +347,17 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
         );
 
         // 5. Send reset email (don't await this, respond immediately)
-        console.log(`${logPrefix} [7/7] Scheduling password reset email...`);
+        logger.info(`${logPrefix} [7/7] Scheduling password reset email...`);
         const resetUrl = `${config.backendUrl || 'http://localhost:5000'}/reset-password?token=${token}`;
         
         // Don't await the email sending, just start it and respond
-        sendPasswordResetEmail(user.email, resetUrl)
+        userDoc = Array.isArray(user) ? user[0] : user;
+        sendPasswordResetEmail((userDoc as any).email, resetUrl)
           .then(() => {
-            console.log(`${logPrefix} [EMAIL_SENT] Password reset email sent to ${user.email}`);
+            logger.info(`${logPrefix} [EMAIL_SENT] Password reset email sent to ${(userDoc as any).email}`);
           })
           .catch((emailError) => {
-            console.error(`${logPrefix} [EMAIL_ERROR] Failed to send email:`, emailError);
+            logger.error(`${logPrefix} [EMAIL_ERROR] Failed to send email:`, emailError);
           });
 
         return {
@@ -370,7 +366,7 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
         };
 
       } catch (error) {
-        console.error(`${logPrefix} [ERROR] Error in password reset:`, error);
+        logger.error(`${logPrefix} [ERROR] Error in password reset:`, error);
         throw error;
       }
     })();
@@ -389,7 +385,7 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
-      console.log(`${logPrefix} [COMPLETE] Forgot password process completed for email:`, email);
+      logger.debug(`${logPrefix} [COMPLETE] Forgot password process completed for email:`, email);
     }
   }
 };
@@ -439,16 +435,16 @@ export const changePassword = async (userId: string, currentPassword: string, ne
 
     return { success: true, message: 'Password changed successfully.' };
   } catch (error) {
-    console.error('Change password error:', error);
+    logger.error('Change password error:', error);
     if (error instanceof Error) {
       return { 
-        success: 0, 
+        success: false, 
         message: error.message.includes('validation') 
           ? 'Invalid password format. ' + error.message 
           : 'An error occurred while changing password.' 
       };
     }
-    return { success: 0, message: 'An error occurred while changing password.' };
+    return { success: false, message: 'An error occurred while changing password.' };
   }
 };
 
@@ -460,13 +456,13 @@ export const setPassword = async (userId: string, newPassword: string): Promise<
     const user = await User.findById(userId);
     
     if (!user) {
-      return { success: 0, message: 'User not found' };
+      return { success: false, message: 'User not found' };
     }
 
     // Only allow setting password for OAuth users who don't have a password
     if (!user.isOAuthUser || user.password) {
       return { 
-        success: 0, 
+        success: false, 
         message: 'Password cannot be set for this account.' 
       };
     }
@@ -479,12 +475,12 @@ export const setPassword = async (userId: string, newPassword: string): Promise<
     await user.save();
 
     return { 
-      success: 1, 
+      success: true, 
       message: 'Password set successfully. You can now log in with your email and password.' 
     };
   } catch (error) {
-    console.error('Set password error:', error);
-    return { success: 0, message: 'Failed to set password. Please try again later.' };
+    logger.error('Set password error:', error);
+    return { success: false, message: 'Failed to set password. Please try again later.' };
   }
 };
 
@@ -555,7 +551,7 @@ export const deleteUser = async (userId: string): Promise<{ success: boolean; me
       message: 'Account deleted successfully' 
     };
   } catch (error) {
-    console.error('Error deleting user account:', error);
+    logger.error('Error deleting user account:', error);
     throw new AppError('Failed to delete account. Please try again later.', 500);
   }
 };
@@ -593,7 +589,7 @@ export const resetPassword = async (token: string, newPassword: string): Promise
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorStack = error instanceof Error ? error.stack : undefined;
     
-    console.error(`❌ ${logPrefix} [ERROR] Unhandled error in resetPassword:`, {
+    logger.error(`❌ ${logPrefix} [ERROR] Unhandled error in resetPassword:`, {
       error: errorMessage,
       stack: errorStack,
       timestamp: new Date().toISOString()

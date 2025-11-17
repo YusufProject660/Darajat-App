@@ -69,10 +69,6 @@ export const createTestUser = async (userData: Partial<IUser> = {}): Promise<IUs
       gamesPlayed: 0,
       accuracy: 0,
       bestScore: 0,
-      totalCorrectAnswers: 0,
-      totalQuestionsAnswered: 0,
-      totalTimePlayed: 0,
-      averageAccuracy: 0
     },
     ...userData
   };

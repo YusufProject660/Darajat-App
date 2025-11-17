@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { Types } from 'mongoose';
 import { config } from '../config/env';
 import User, { IUser } from '../modules/users/user.model';
+import { logger } from '../utils/logger';
 
 // Extend the Express Request type
 declare global {
@@ -46,9 +47,6 @@ export const protect = async (
   }
 
   try {
-    // Log the received token for debugging
-    console.log('Verifying token:', token);
-    
     // Verify token
     const decoded = jwt.verify(token, config.jwtSecret) as { 
       id: string; 
@@ -57,10 +55,8 @@ export const protect = async (
       username?: string;
     };
     
-    console.log('Decoded token payload:', JSON.stringify(decoded, null, 2));
-    
     if (!decoded.id) {
-      console.error('Token is missing user ID');
+      logger.warn('Token is missing user ID');
       return res.status(200).json({
         status: 0,
         message: "Invalid or expired token"
@@ -71,34 +67,18 @@ export const protect = async (
     const user = await User.findById(new Types.ObjectId(decoded.id)).select('-password');
     
     if (!user) {
-      console.error(`User not found with ID: ${decoded.id}`);
+      logger.warn(`User not found with ID: ${decoded.id}`);
       return res.status(200).json({
         status: 0,
         message: "Invalid or expired token"
       });
     }
 
-    // Convert to plain object and explicitly type it as IUser
-    const userObj = user.toObject();
-    // Make sure the required fields are properly set on the user object
-    req.user = {
-      _id: userObj._id,
-      id: userObj._id.toString(),
-      username: userObj.username, // Ensure username is included
-      email: userObj.email,
-      avatar: userObj.avatar,     // Include avatar as it's used in game
-      role: userObj.role || 'player',
-      password: userObj.password,
-      confirmPassword: userObj.confirmPassword,
-      stats: userObj.stats || {
-        gamesPlayed: 0,
-        accuracy: 0,
-        bestScore: 0
-      }
-    } as IUser;
+    // Attach user to request
+    req.user = user as IUser;
     return next();
   } catch (error) {
-    console.error('Token verification error:', error);
+    logger.error('Token verification error:', error);
     return res.status(200).json({
       status: 0,
       message: "Invalid or expired token"

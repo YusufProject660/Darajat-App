@@ -2,11 +2,9 @@ import express, { Request, Response, NextFunction } from 'express';
 import { protect } from '../../middlewares/auth.middleware';
 import { isHost, isGameInLobby } from '../../middlewares/game.middleware';
 import { validateCreateGame, validateJoinGame } from './validations/game.validations';
-import { IUser } from '../users/user.model';
 
 // Middleware to handle method not allowed
 export const methodNotAllowed = (req: Request, res: Response, next: NextFunction) => {
-  const allowedMethods = ['POST', 'GET']; // Add more methods as needed for other routes
   const routePath = req.path;
   
   // Determine the allowed method based on the route
@@ -24,7 +22,7 @@ export const methodNotAllowed = (req: Request, res: Response, next: NextFunction
       message: `Invalid request method. Only ${allowedMethod} is allowed for this endpoint.`
     });
   }
-  next();
+  return next();
 };
 
 // Middleware to validate PATCH method for specific routes
@@ -35,7 +33,7 @@ export const validatePatchMethod = (req: Request, res: Response, next: NextFunct
       message: 'Method not allowed. Use PATCH for this endpoint.'
     });
   }
-  next();
+  return next();
 };
 import {
   createGame, 
@@ -137,13 +135,6 @@ router.get('/summary/:roomCode', protect, getGameSummary);
  * @access  Private
  */
 
-interface IFinishGameRequest extends Request {
-  params: {
-    roomCode: string;
-  };
-  user?: IUser;
-}
-
 /**
  * @route   GET /api/game/my-games
  * @desc    Get all games created by the logged-in user
@@ -152,7 +143,7 @@ interface IFinishGameRequest extends Request {
 router.get('/my-games', protect, getMyGames);
 
 // Host-only routes
-router.patch('/finish/:roomCode', validatePatchMethod, protect, isHost, (req: IFinishGameRequest, res: Response, next) => finishGame(req, res, next));
+router.patch('/finish/:roomCode', validatePatchMethod, protect, isHost, finishGame);
 
 /**
  * @route   PATCH /api/game/:roomCode/ready
@@ -160,7 +151,9 @@ router.patch('/finish/:roomCode', validatePatchMethod, protect, isHost, (req: IF
  * @access  Private
  */
 router.route('/:roomCode/ready')
-  .patch(protect, (req: Request, res: Response, next: NextFunction) => toggleReadyStatus(req, res, next))
+  .patch(protect, (req: Request, res: Response, next: NextFunction) => {
+    return toggleReadyStatus(req as any, res, next);
+  })
   .all(methodNotAllowed);
 
 /**
@@ -179,7 +172,7 @@ router.route('/:roomCode/start')
  */
 router.route('/:roomCode/players/:playerId/kick')
   .post(protect, isHost, kickPlayer)
-  .all((req: Request, res: Response) => {
+  .all((_req: Request, res: Response) => {
     res.status(200).json({
       status: 0,
       message: 'Method not allowed. Use POST for this endpoint.'

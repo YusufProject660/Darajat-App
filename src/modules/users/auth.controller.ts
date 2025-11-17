@@ -1,4 +1,4 @@
-import { Response, NextFunction } from 'express';
+import { Response } from 'express';
 import jwt from 'jsonwebtoken';
 import path from 'path';
 import fs from 'fs/promises';
@@ -9,7 +9,8 @@ import { register, login, getMe, forgotPassword, resetPassword, changePassword a
 import { addToBlacklist } from '../../utils/tokenBlacklist';
 import { AppError } from '../../utils/appError';
 import { AuthRequest } from './types/user.types';
-import asyncHandler from '../middleware/async';
+import asyncHandler from '../../middlewares/async';
+import { logger } from '../../utils/logger';
 
 // Import the password validation utility
 import { validatePassword } from '../../utils/passwordValidator';
@@ -29,9 +30,10 @@ const generateToken = (user: IUser): string => {
 // @desc    Register a new user
 // @route   POST /api/auth/signup
 // @access  Public
-export const registerUser = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const registerUser = asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
-    const { email, password, confirmPassword } = req.body;
+    const body = req.body as { email?: string; password?: string; confirmPassword?: string };
+    const { email, password, confirmPassword } = body;
 
     // Field-wise validation
     if (!email) {
@@ -96,7 +98,8 @@ if (domainParts.length > 2) {
 }
 
     try {
-      const { fullname, username } = req.body;
+      const body = req.body as { fullname?: string; username?: string };
+      const { fullname, username } = body;
       const user = await register(email, password, confirmPassword, username, fullname);
       
       // Set the token in the response header
@@ -116,7 +119,7 @@ if (domainParts.length > 2) {
         data: responseData
       });
     } catch (error: any) {
-      console.error('Registration error:', error);
+      logger.error('Registration error:', error);
       
       // Handle validation errors from Mongoose
       if (error.name === 'ValidationError') {
@@ -158,7 +161,7 @@ if (domainParts.length > 2) {
     }
   } catch (error) {
     // This is the outer try-catch block's catch
-    console.error('Unexpected error in registerUser:', error);
+    logger.error('Unexpected error in registerUser:', error);
     return res.status(200).json({
       status: 0,
       message: 'An unexpected error occurred. Please try again.'
@@ -169,10 +172,11 @@ if (domainParts.length > 2) {
 // @desc    Authenticate a user
 // @route   POST /api/auth/login
 // @access  Public
-export const loginUser = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+export const loginUser = asyncHandler(async (req: Request, res: Response) => {
   // Trim and validate input fields
-  const email = req.body.email?.trim();
-  const password = req.body.password?.trim();
+  const body = req.body as { email?: string; password?: string };
+  const email = body.email?.trim();
+  const password = body.password?.trim();
 
   // Validate required fields
   if (!email && !password) {
@@ -252,19 +256,20 @@ export const loginUser = asyncHandler(async (req: Request, res: Response, next: 
     }
     
     // Pass other errors to the global error handler
-    next(error);
+    throw error;
   }
+  return;
 });
 // @desc    Get current user profile
 // @route   GET /api/auth/me
 // @access  Private
-export const getMeHandler = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const getMeHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
   try {
-    if (!req.user?._id) {
-      return next(new AppError('User not authenticated', 401));
+    if (!req.user?.id) {
+      return res.status(200).json({ status: 0, message: 'User not authenticated' });
     }
     
-    const user = await getMe(req.user._id.toString());
+    const user = await getMe(req.user.id);
     
     // Format the response to match the required structure
     return res.status(200).json({
@@ -288,9 +293,9 @@ export const getMeHandler = asyncHandler(async (req: AuthRequest, res: Response,
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'User not found') {
-      return next(new AppError('User not found', 404));
+      return res.status(200).json({ status: 0, message: 'User not found' });
     }
-    return next(error);
+    throw error;
   }
 });
 
@@ -299,7 +304,7 @@ export const getMeHandler = asyncHandler(async (req: AuthRequest, res: Response,
 // @access  Private
 export const logoutUser = asyncHandler(async (req: Request, res: Response) => {
   // Get token from header
-  const authHeader = req.headers.authorization;
+  const authHeader = (req.headers as any).authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(200).json({
@@ -325,12 +330,12 @@ export const logoutUser = asyncHandler(async (req: Request, res: Response) => {
 // @desc    Check if user is admin
 // @route   GET /api/auth/admin
 // @access  Private/Admin
-export const isAdmin = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const isAdmin = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user || req.user.role !== 'admin') {
-    return next(new AppError('Not authorized to access this route', 403));
+    return res.status(200).json({ status: 0, message: 'Not authorized to access this route' });
   }
   
-  res.status(200).json({
+  return res.status(200).json({
     success: true,
     data: { role: 'admin' }
   });
@@ -342,17 +347,17 @@ export const isAdmin = asyncHandler(async (req: AuthRequest, res: Response, next
 export const googleCallback = async (req: Request, res: Response) => {
   try {
     // The user should be attached to req.user by Passport
-    if (!req.user) {
+    if (!(req as any).user) {
       return res.redirect('/api/auth/google/failure');
     }
     
     // Generate token
-    const token = generateToken(req.user as unknown as IUser);
+    const token = generateToken((req as any).user as unknown as IUser);
     
     // Redirect to success with token
     return res.redirect(`/api/auth/google/success?token=${token}`);
   } catch (error) {
-    console.error('Google OAuth callback error:', error);
+    logger.error('Google OAuth callback error:', error);
     return res.redirect('/api/auth/google/failure');
   }
 };
@@ -362,7 +367,7 @@ export const googleCallback = async (req: Request, res: Response) => {
 // @access  Public
 export const googleAuthSuccess = (req: Request, res: Response) => {
   try {
-    const { token } = req.query;
+    const { token } = (req as any).query;
     
     if (!token) {
       return res.status(200).json({
@@ -377,7 +382,7 @@ export const googleAuthSuccess = (req: Request, res: Response) => {
       data: { token }
     });
   } catch (error) {
-    console.error('Google OAuth success error:', error);
+    logger.error('Google OAuth success error:', error);
     return res.status(200).json({
       status: 0,
       message: 'Internal server error'
@@ -400,7 +405,8 @@ export const googleAuthFailure = (_req: Request, res: Response) => {
 // @route   POST /api/auth/forgot-password
 // @access  Public
 export const requestPasswordReset = asyncHandler(async (req: Request, res: Response) => {
-  const { email } = req.body;
+  const body = req.body as { email?: string };
+  const { email } = body;
   
   // Validate email presence
   if (!email) {
@@ -433,15 +439,15 @@ export const requestPasswordReset = asyncHandler(async (req: Request, res: Respo
   }
 
   try {
-    console.log('🔑 [1/3] Starting password reset request for email:', normalizedEmail);
+    logger.info('🔑 [1/3] Starting password reset request for email:', normalizedEmail);
     
     // Call the forgot password service
-    console.log('🔑 [2/3] Calling forgotPassword service...');
+    logger.info('🔑 [2/3] Calling forgotPassword service...');
     const result = await forgotPassword(normalizedEmail);
     
     // Check the result status
     if (result.status === 0) {
-      console.log('⚠️ [3/3] Password reset request failed:', {
+      logger.warn('⚠️ [3/3] Password reset request failed:', {
         code: result.code,
         message: result.message,
         remainingTime: result.remainingTime
@@ -465,7 +471,7 @@ export const requestPasswordReset = asyncHandler(async (req: Request, res: Respo
       });
     }
     
-    console.log('✅ [3/3] Password reset email sent successfully');
+    logger.info('✅ [3/3] Password reset email sent successfully');
     
     // Return success response
     return res.status(200).json({
@@ -478,7 +484,7 @@ export const requestPasswordReset = asyncHandler(async (req: Request, res: Respo
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorStack = error instanceof Error ? error.stack : undefined;
     
-    console.error('❌ [ERROR] Failed to process password reset request:', {
+    logger.error('❌ [ERROR] Failed to process password reset request:', {
       error: errorMessage,
       stack: errorStack,
       timestamp: new Date().toISOString()
@@ -499,27 +505,28 @@ export const requestPasswordReset = asyncHandler(async (req: Request, res: Respo
 // @desc    Reset Password Page
 // @route   GET /api/auth/reset-password
 // @access  Public
-export const resetPasswordPage = async (req: Request, res: Response, next: NextFunction) => {
+export const resetPasswordPage = async (req: Request, res: Response): Promise<void> => {
     try {
-        const { token } = req.query;
+        const { token } = (req as any).query as { token?: string };
         
         if (!token) {
-            return res.status(400).send('Invalid or missing reset token');
+            res.status(400).send('Invalid or missing reset token');
+            return;
         }
 
         // Create public directory if it doesn't exist
         const publicDir = path.join(__dirname, '../../../public');
         if (!fsSync.existsSync(publicDir)) {
-            console.log(`Creating public directory at: ${publicDir}`);
+            logger.debug(`Creating public directory at: ${publicDir}`);
             await fs.mkdir(publicDir, { recursive: true });
         }
 
         const filePath = path.join(publicDir, 'reset-password.html');
-        console.log(`Looking for reset password HTML at: ${filePath}`);
+        logger.debug(`Looking for reset password HTML at: ${filePath}`);
         
         // Check if file exists, if not create it
         if (!fsSync.existsSync(filePath)) {
-            console.log('Reset password HTML not found, creating new one...');
+            logger.info('Reset password HTML not found, creating new one...');
             await fs.writeFile(filePath, getResetPasswordHTML(), 'utf-8');
         }
 
@@ -535,7 +542,7 @@ export const resetPasswordPage = async (req: Request, res: Response, next: NextF
         res.setHeader('Content-Type', 'text/html');
         res.send(html);
     } catch (error) {
-        console.error('Error serving reset password page:', error);
+        logger.error('Error serving reset password page:', error);
         res.status(500).send('An error occurred while loading the reset password page');
     }
 };
@@ -543,9 +550,10 @@ export const resetPasswordPage = async (req: Request, res: Response, next: NextF
 // @desc    Reset Password
 // @route   POST /api/auth/reset-password
 // @access  Public
-export const resetPasswordHandler = async (req: Request, res: Response, next: NextFunction) => {
+export const resetPasswordHandler = async (req: Request, res: Response): Promise<void> => {
   try {
-    let { token, password, confirmPassword } = req.body;
+    const body = req.body as { token?: string; password?: string; confirmPassword?: string };
+    let { token, password, confirmPassword } = body;
 
     // Trim whitespace from inputs
     token = token?.trim();
@@ -554,42 +562,47 @@ export const resetPasswordHandler = async (req: Request, res: Response, next: Ne
 
     // Validate token
     if (!token) {
-      return res.status(200).json({
+      res.status(200).json({
         status: 0,
         message: 'Token is required'
       });
+      return;
     }
 
     // Validate passwords
     if (!password || !confirmPassword) {
-      return res.status(200).json({
+      res.status(200).json({
         status: 0,
         message: 'Both password and confirm password are required'
       });
+      return;
     }
 
     if (password !== confirmPassword) {
-      return res.status(200).json({
+      res.status(200).json({
         status: 0,
         message: 'Passwords do not match'
       });
+      return;
     }
 
     const passwordValidation = validatePassword(password);
     if (!passwordValidation.isValid) {
-      return res.status(200).json({
+      res.status(200).json({
         status: 0,
         message: passwordValidation.message
       });
+      return;
     }
 
     const result = await resetPassword(token, password);
     
     if (!result.success) {
-      return res.status(200).json({
+      res.status(200).json({
         status: 0,
         message: result.message
       });
+      return;
     }
 
     res.status(200).json({
@@ -597,7 +610,7 @@ export const resetPasswordHandler = async (req: Request, res: Response, next: Ne
       message: result.message || 'Password has been reset successfully'
     });
   } catch (error) {
-    console.error('Error in resetPasswordHandler:', error);
+    logger.error('Error in resetPasswordHandler:', error);
     res.status(200).json({
       status: 0,
       message: 'An error occurred while resetting your password'
@@ -800,7 +813,7 @@ const getResetPasswordHTML = () => {
                     }, 3000);
                     
                 } catch (error) {
-                    console.error('Error:', error);
+                    logger.error('Error:', error);
                     errorMessage.textContent = error.message || 'An error occurred while resetting your password. Please try again.';
                 } finally {
                     submitBtn.disabled = false;
@@ -831,12 +844,13 @@ const getResetPasswordHTML = () => {
 // @desc    Update user profile
 // @route   PATCH /api/user/profile
 // @access  Private
-export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
-  const { firstName, lastName, email } = req.body;
+export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const body = req.body as { firstName?: string; lastName?: string; email?: string };
+  const { firstName, lastName, email } = body;
   
   // Validate request body
   if (!firstName && !lastName && !email) {
-    return next(new AppError('At least one field (firstName, lastName, or email) is required to update profile', 400));
+    return res.status(200).json({ status: 0, message: 'At least one field (firstName, lastName, or email) is required to update profile' });
   }
 
   try {
@@ -852,9 +866,9 @@ export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Resp
     }, 'Profile updated successfully');
   } catch (error: any) {
     if (error.message === 'Email already in use' || error.message === 'Username already taken') {
-      return next(new AppError(error.message, 400));
+      return res.status(200).json({ status: 0, message: error.message });
     }
-    return next(new AppError('Failed to update profile', 500));
+    return res.status(200).json({ status: 0, message: 'Failed to update profile' });
   }
 });
 
@@ -864,7 +878,7 @@ export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Resp
 // @desc    Delete user account permanently
 // @route   DELETE /api/user/delete
 // @access  Private
-export const deleteUserAccount = asyncHandler(async (req: AuthRequest, res: Response, _next: NextFunction) => {
+export const deleteUserAccount = asyncHandler(async (req: AuthRequest, res: Response) => {
   const userId = req.user?.id;
 
   if (!userId) {
@@ -893,7 +907,7 @@ export const deleteUserAccount = asyncHandler(async (req: AuthRequest, res: Resp
       message: 'Account deleted successfully'
     });
   } catch (error: any) {
-    console.error('Error deleting account:', error);
+    logger.error('Error deleting account:', error);
     return res.status(200).json({
       status: 0,
       message: 'Failed to delete account. Please try again later.'
@@ -904,15 +918,16 @@ export const deleteUserAccount = asyncHandler(async (req: AuthRequest, res: Resp
 // @desc    Change user password
 // @route   PATCH /api/auth/change-password
 // @access  Private
-export const changePassword = asyncHandler(async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const changePassword = asyncHandler(async (req: AuthRequest, res: Response) => {
   // Trim all input fields
-  const currentPassword = req.body.currentPassword?.trim() || '';
-  const newPassword = req.body.newPassword?.trim() || '';
-  const confirmNewPassword = req.body.confirmNewPassword?.trim() || '';
-  const userId = req.user?._id;
+  const body = req.body as { currentPassword?: string; newPassword?: string; confirmNewPassword?: string };
+  const currentPassword = body.currentPassword?.trim() || '';
+  const newPassword = body.newPassword?.trim() || '';
+  const confirmNewPassword = body.confirmNewPassword?.trim() || '';
+  const userId = req.user?.id;
 
   if (!userId) {
-    return next(new AppError('User not authenticated', 401));
+    return res.status(200).json({ status: 0, message: 'User not authenticated' });
   }
 
   // Check if all fields are empty after trimming
@@ -977,7 +992,7 @@ export const changePassword = asyncHandler(async (req: AuthRequest, res: Respons
     });
   }
 
-  res.status(200).json({
+  return res.status(200).json({
     status: 1,
     message: result.message
   });

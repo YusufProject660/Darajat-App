@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { body, validationResult, ValidationChain } from 'express-validator';
-import { AppError } from '../../../utils/appError';
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
 const CATEGORIES = ['sawm', 'salah', 'prophets', 'fiqh'] as const;
@@ -160,13 +159,16 @@ const handleValidationErrors: RequestHandler = (req: Request, res: Response, nex
       const categoryError = errorMessages.find(e => (e.message || '').includes('At least one category must be enabled'));
       const errorMessage = categoryError ? categoryError.message : (errorMessages[0]?.message || 'Invalid request');
       
-      return res.apiError(errorMessage, 'VALIDATION_ERROR');
+      res.apiError(errorMessage, 'VALIDATION_ERROR');
+      return;
     }
     
     next();
+    return;
   } catch (error) {
     console.error('Error in validation middleware:', error);
-    return res.apiError('An error occurred during validation', 'VALIDATION_ERROR');
+    res.apiError('An error occurred during validation', 'VALIDATION_ERROR');
+    return;
   }
 };
 

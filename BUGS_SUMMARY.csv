@@ -1,0 +1,74 @@
+Bug ID,Bug Type,Severity,File Path,Line Number,Description,Impact Area,Module
+BUG-001,Duplicate Code,CRITICAL,src/app.ts,429,Duplicate App instance created in app.ts and index.ts,Application Initialization,Core
+BUG-002,Duplicate Code,HIGH,src/app.ts,79-100,Email transporter initialized twice,Email Service,Core
+BUG-003,Duplicate Code,HIGH,src/app.ts,178-266,express.json() called 4 times and express.urlencoded() called 4 times,Request Processing,Core
+BUG-004,Duplicate Code,HIGH,src/app.ts,124-305,Health check route defined twice,API Routes,Core
+BUG-005,Duplicate Code,HIGH,src/app.ts,318-368,/api/decks route defined twice,API Routes,Core
+BUG-006,Missing Function,CRITICAL,src/modules/games/services/socket.service.ts,168,handlePlayerDisconnect function called but not defined,WebSocket Disconnection,Game Module
+BUG-007,Missing Function,CRITICAL,src/modules/games/services/socket.service.ts,92,gameService.createRoom() called but method doesn't exist,Game Room Creation,Game Module
+BUG-008,Function Signature Mismatch,CRITICAL,src/modules/games/services/socket.service.ts,96,joinRoom called with string but expects Partial<IPlayer> object,Game Room Joining,Game Module
+BUG-009,Missing Interface,CRITICAL,src/modules/games/game.controller.ts,760,PlayerStats interface used but not defined,Game Leaderboard,Game Module
+BUG-010,Logical Error,HIGH,src/modules/games/services/game.service.ts,37-585,activeRooms property commented but used in cleanup(),Memory Management,Game Module
+BUG-011,Import Error,MEDIUM,src/modules/games/services/game.service.ts,3-444,Socket import commented as unused but actually used,Type Safety,Game Module
+BUG-012,Duplicate Code,HIGH,Multiple Files,Multiple,Three different socket connection handlers exist,WebSocket Management,Game Module
+BUG-013,Data Inconsistency,HIGH,src/modules/games/websocket.routes.ts,28,In-memory Map storage not synced with MongoDB database,Game State Management,Game Module
+BUG-014,Missing Import,CRITICAL,src/modules/users/auth.routes.ts,96,Request and Response types used but not imported,Type Safety,User Module
+BUG-015,Missing Export,CRITICAL,src/modules/users/auth.service.ts,27-65,formatUserResponse and generateToken not exported,Profile Controller,User Module
+BUG-016,Field Name Mismatch,CRITICAL,src/modules/users/auth.service.ts,361,resetPasswordToken used but model has resetToken,Password Reset,User Module
+BUG-017,Incomplete Return,CRITICAL,src/modules/users/auth.service.ts,544-551,updateProfile missing token role stats in return,Profile Update,User Module
+BUG-018,Return Type Error,HIGH,src/modules/users/auth.service.ts,459-465,changePassword returns 0/1 instead of boolean,Password Change,User Module
+BUG-019,Timeout Bug,CRITICAL,src/modules/users/auth.routes.ts,97,ROUTE_TIMEOUT is 20000000ms (5.5 hours) instead of 30 seconds,Request Timeout,User Module
+BUG-020,Timeout Bug,CRITICAL,src/modules/users/auth.service.ts,278,operationTimeout is 60000000ms (16.6 hours) instead of 25 seconds,Email Service,User Module
+BUG-021,Missing Authentication,HIGH,src/modules/users/auth.routes.ts,221,Delete account route has no authentication middleware,Security,User Module
+BUG-022,Syntax Error,CRITICAL,src/modules/users/auth.routes.ts,110,Incomplete console.log statement with trailing comma,Syntax,User Module
+BUG-023,Duplicate Route,MEDIUM,src/modules/users/auth.routes.ts,72-208,Logout route defined twice (POST and GET),API Routes,User Module
+BUG-024,Duplicate Route,MEDIUM,src/modules/users/auth.routes.ts,81-162,Reset password route defined twice,API Routes,User Module
+BUG-025,Duplicate Function,MEDIUM,src/modules/users/auth.controller.ts,50,generateToken function defined twice,Token Generation,User Module
+BUG-026,Security Issue,HIGH,src/app.ts,269,XSS protection middleware commented out,Security,Core
+BUG-027,Security Issue,CRITICAL,src/app.ts,164-186,Excessive console.log logging headers bodies and sensitive data,Security,Core
+BUG-028,Configuration Error,HIGH,src/app.ts,394-396,Socket.IO CORS uses placeholder domain in production,WebSocket CORS,Core
+BUG-029,Unused File,LOW,src/config.ts,All,config.ts file exists but never imported or used,Code Organization,Core
+BUG-030,Code Quality,LOW,src/config.ts,9,Missing space in GOOGLE_CLIENT_SECRET assignment,Code Style,Core
+BUG-031,Duplicate Code,MEDIUM,Multiple Files,Multiple,dotenv.config() called 3 times in different files,Configuration,Core
+BUG-032,Initialization Order,MEDIUM,src/app.ts,123-126,Health check route added after server starts,Route Registration,Core
+BUG-033,Database Connection,MEDIUM,src/index.ts,53,Checks non-existent dbConnection property,Shutdown Handler,Core
+BUG-034,Unused Code,LOW,src/app.ts,204-205,Commented code for raw body parser,Code Cleanup,Core
+BUG-035,Unused Code,LOW,src/modules/users/auth.routes.ts,28-39,Commented validateMethod function,Code Cleanup,User Module
+BUG-036,Unused Code,LOW,src/modules/users/auth.routes.ts,23,protect alias created but never used,Code Cleanup,User Module
+BUG-037,Unused Import,LOW,src/modules/users/auth.controller.ts,6,sendEmail imported but never used,Code Cleanup,User Module
+BUG-038,Inconsistent Response Format,MEDIUM,Multiple Files,Multiple,Different error response formats across files,API Consistency,All Modules
+BUG-039,Inconsistent Validation,MEDIUM,Multiple Files,Multiple,Different password validation rules in different files,Security,User Module
+BUG-040,Missing Parameter,MEDIUM,src/modules/users/auth.service.ts,525,updateProfile checks username but parameter doesn't include it,Profile Update,User Module
+BUG-041,Event Name Inconsistency,MEDIUM,Multiple Files,Multiple,Different socket event names for same actions,WebSocket API,Game Module
+BUG-042,Question Field Inconsistency,MEDIUM,Multiple Files,Multiple,Question model uses question vs text vs questionText inconsistently,Data Model,Game Module
+BUG-043,Type Error,MEDIUM,src/modules/games/services/socket.service.ts,70-115,socket.data types not properly verified,Type Safety,Game Module
+BUG-044,Missing Type,MEDIUM,src/modules/games/websocket.routes.ts,17-25,RoomState interface has unclear types and any[],Type Safety,Game Module
+BUG-045,Missing Error Handling,MEDIUM,src/modules/games/services/socket.service.ts,81-149,Callback functions may not always be called,Error Handling,Game Module
+BUG-046,Missing Middleware Directory,CRITICAL,src/middleware vs src/middlewares,All,Two middleware directories with different implementations,Code Organization,Core
+BUG-047,Duplicate Error Handler,MEDIUM,src/middlewares/error.middleware.ts vs errorHandler.ts,All,Two error handling implementations exist,Error Handling,Core
+BUG-048,Duplicate Error Class,MEDIUM,src/utils/appError.ts vs ApiError.ts,All,Two error class implementations,Error Handling,Core
+BUG-049,Inconsistent Error Format,MEDIUM,src/middlewares/role.middleware.ts,20-31,Uses HTTP status codes instead of custom format,API Consistency,Core
+BUG-050,Incomplete Implementation,MEDIUM,src/middleware/async.ts,8-11,asyncHandler function has empty implementation,Error Handling,Core
+BUG-051,Missing Function,CRITICAL,src/modules/games/services/socket.service.ts,168,handlePlayerDisconnect function called but not defined in SocketService class,WebSocket Disconnection Handler,Game Module
+BUG-052,Missing Function,CRITICAL,src/modules/games/services/game.service.ts,Missing,createRoom method does not exist in GameService class,Game Room Creation Service,Game Module
+BUG-053,Missing Export,CRITICAL,src/modules/users/auth.service.ts,27,generateToken function defined but not exported,Token Generation Export,User Module
+BUG-054,Missing Export,CRITICAL,src/modules/users/auth.service.ts,65,formatUserResponse function defined but not exported,User Response Formatting Export,User Module
+BUG-055,Function Signature Mismatch,CRITICAL,src/modules/games/services/socket.service.ts,96,joinRoom called with (string string) but expects (string Partial<IPlayer>),Game Room Join Parameters,Game Module
+BUG-056,Function Signature Mismatch,HIGH,src/modules/games/services/socket.service.ts,168,handlePlayerDisconnect signature differs from game.service version,Disconnect Handler Signature,Game Module
+BUG-057,Route Flow Break,CRITICAL,src/modules/users/auth.routes.ts,162,Route path has double prefix /api/auth/api/auth/reset-password making it unreachable,Route Path Error,User Module
+BUG-058,Route Flow Break,CRITICAL,src/modules/users/auth.routes.ts,221,Delete route has no authentication middleware allowing unauthorized access,Authentication Missing,User Module
+BUG-059,Route Flow Break,CRITICAL,src/modules/users/auth.routes.ts,96,handleForgotPassword uses Request Response types but they are not imported,Missing Type Imports,User Module
+BUG-060,Duplicate Route,HIGH,src/modules/games/game.routes.ts,127-205,Summary route defined twice second definition never executes,Route Duplication,Game Module
+BUG-061,Duplicate Route,HIGH,src/modules/games/game.routes.ts,134-212,Leaderboard route defined twice second definition never executes,Route Duplication,Game Module
+BUG-062,Route Handler Conflict,MEDIUM,src/modules/users/auth.routes.ts,62-72,router.all('/logout') creates unnecessary middleware layer before router.post,Route Middleware Conflict,User Module
+BUG-063,Route Documentation Error,LOW,src/modules/games/game.routes.ts,137,Comment says /api/games/finish but actual path is /api/game/finish,Documentation Mismatch,Game Module
+BUG-064,Socket Configuration,CRITICAL,src/app.ts,394-396,Production CORS uses placeholder domain your-production-domain.com will fail in production,Socket CORS Configuration,Core
+BUG-065,Socket Initialization,CRITICAL,src/modules/games/websocket.routes.ts,119,createWebSocketRouter function exported but NEVER called socket handlers never execute,Unused Socket Handler,Game Module
+BUG-066,Socket Initialization,CRITICAL,src/modules/games/services/game.service.ts,49,gameService.initialize(io) method exists but NEVER called socket listeners never set up,Missing Socket Initialization,Game Module
+BUG-067,Socket Workflow,CRITICAL,Multiple Files,Multiple,Three different socket connection handlers conflict all fire for same connection causing duplicate processing,Socket Handler Conflicts,Game Module
+BUG-068,Data Synchronization,CRITICAL,src/modules/games/websocket.routes.ts,28,In-memory Map gameRooms never synced with MongoDB database complete state desynchronization,State Management,Game Module
+BUG-069,Event Name Inconsistency,HIGH,Multiple Files,Multiple,Event names inconsistent player_joined vs player:joined player_left vs player:left,Event Naming,Game Module
+BUG-070,Socket Authentication,HIGH,All Socket Handlers,Multiple,No JWT token verification for socket connections security vulnerability,Authentication Missing,Game Module
+BUG-071,Socket Data Type,MEDIUM,Multiple Files,Multiple,Socket data structure inconsistent different properties in different files type mismatch,Type Safety,Game Module
+BUG-072,Question Field Name,MEDIUM,src/modules/games/websocket.routes.ts,675,Uses question.question OR question.text field name inconsistency unpredictable behavior,Data Model,Game Module
+

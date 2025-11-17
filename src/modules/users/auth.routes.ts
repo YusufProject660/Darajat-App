@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response } from 'express';
 import passport from 'passport';
 import { 
   registerUser, 
@@ -8,7 +8,6 @@ import {
   googleCallback,
   googleAuthSuccess,
   googleAuthFailure,
-  requestPasswordReset,
   resetPasswordHandler,
   resetPasswordPage,
   changePassword,
@@ -19,31 +18,9 @@ import {
 import { forgotPassword as forgotPasswordService } from './auth.service';
 import { protect } from '../../middlewares/auth.middleware';
 import { authorize } from '../../middlewares/role.middleware';
+import { logger } from '../../utils/logger';
 
 const router = Router();
-/**
- * Middleware factory function that enforces a specific HTTP method for a route.
- * If the request method doesn't match the allowed method, it returns a 200 status
- * with an error message indicating the allowed method.
- * 
- * @param {string} allowedMethod - The HTTP method that is allowed (e.g., 'GET', 'POST')
- * @param {Function} handler - The route handler function to execute if the method matches
- * @returns {Function} A middleware function that validates the HTTP method before proceeding
- */
-const validateMethod = (allowedMethod: string, handler: any) => {
-  return (req: any, res: any, next: any) => {
-    if (req.method !== allowedMethod) {
-      // Set the Allow header to indicate allowed methods
-      res.set('Allow', allowedMethod);
-      return res.status(200).json({
-        status: 0,
-        message: `Method not allowed. Please use ${allowedMethod} for this endpoint.`
-      });
-    }
-    // Proceed to the route handler if the method matches
-    return handler(req, res, next);
-  };
-}
 
 // Public routes
 router.all('/signup', (req, res, next) => {
@@ -69,26 +46,22 @@ router.all('/login', (req, res, next) => {
 router.all('/logout', (req, res, next) => {
   if (req.method !== 'POST') {
     res.set('Allow', 'POST');
-    return res.status(200).json({
+    res.status(200).json({
       status: 0,
       message: 'Method not allowed. Please use POST method for this endpoint.'
     });
+    return;
   }
   next();
+  return;
 });
 router.post('/logout', logoutUser);
 
 // Password reset routes
-router.get('/api/auth/reset-password', (req, res, next) => {
-  console.log('GET /api/auth/reset-password route hit');
-  return resetPasswordPage(req, res, next);
-});
+router.get('/api/auth/reset-password', resetPasswordPage as any);
 
 // Handle the reset password form submission
-router.post('/api/auth/reset-password', (req, res, next) => {
-  console.log('POST /api/auth/reset-password route hit');
-  return resetPasswordHandler(req, res, next);
-});
+router.post('/api/auth/reset-password', resetPasswordHandler as any);
 
 // Helper function to create a timeout promise
 const createTimeout = <T>(ms: number, message: string): Promise<T> => {
@@ -100,11 +73,11 @@ const createTimeout = <T>(ms: number, message: string): Promise<T> => {
 };
 
 // Forgot password route with timeout handling
-const handleForgotPassword = async (req: Request, res: Response, next: NextFunction) => {
+const handleForgotPassword = async (req: Request, res: Response) => {
   const ROUTE_TIMEOUT = 30000; // 30 seconds
   const logPrefix = '🔵 [FORGOT_PASSWORD_ROUTE]';
   
-  console.log(`${logPrefix} [START] Processing forgot password request`);
+  logger.info(`${logPrefix} [START] Processing forgot password request`);
   
   // Set a timeout for the entire request
   const timeoutPromise = createTimeout<never>(
@@ -117,7 +90,7 @@ const handleForgotPassword = async (req: Request, res: Response, next: NextFunct
     
     // Validate email presence
     if (!email) {
-      console.log(`${logPrefix} [ERROR] Email is required`);
+      logger.warn(`${logPrefix} [ERROR] Email is required`);
       return res.status(200).json({
         status: 0,
         message: 'Email is required.',
@@ -127,7 +100,7 @@ const handleForgotPassword = async (req: Request, res: Response, next: NextFunct
 
     // Normalize the email
     const normalizedEmail = email.trim().toLowerCase();
-    console.log(`${logPrefix} [PROCESSING] Processing request for email:`, normalizedEmail);
+    logger.info(`${logPrefix} [PROCESSING] Processing request for email:`, normalizedEmail);
 
     // Call the forgotPassword service with timeout
     const result = await Promise.race([
@@ -135,12 +108,12 @@ const handleForgotPassword = async (req: Request, res: Response, next: NextFunct
       timeoutPromise
     ]);
 
-    console.log(`${logPrefix} [SUCCESS] Password reset processed for:`, normalizedEmail);
+    logger.info(`${logPrefix} [SUCCESS] Password reset processed for:`, normalizedEmail);
     return res.status(200).json(result);
     
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`${logPrefix} [ERROR]`, error);
+    logger.error(`${logPrefix} [ERROR]`, error);
     
     if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
       return res.status(200).json({
@@ -156,7 +129,7 @@ const handleForgotPassword = async (req: Request, res: Response, next: NextFunct
       code: 'INTERNAL_ERROR'
     });
   } finally {
-    console.log(`${logPrefix} [END] Request processing completed`);
+    logger.debug(`${logPrefix} [END] Request processing completed`);
   }
 };
 
@@ -176,21 +149,23 @@ router.get('/google/callback',
     failureRedirect: '/api/auth/google/failure',
     session: false 
   }),
-  googleCallback
+  googleCallback as any
 );
 
-router.get('/google/success', googleAuthSuccess);
-router.get('/google/failure', googleAuthFailure);
+router.get('/google/success', googleAuthSuccess as any);
+router.get('/google/failure', googleAuthFailure as any);
 
 // Profile routes - Method validation before authentication
 router.all('/profile', (req, res, next) => {
   if (req.method !== 'PATCH') {
-    return res.status(200).json({
+    res.status(200).json({
       status: 0,
       message: 'Invalid request method. Please use PATCH for this endpoint.'
     });
+    return;
   }
   next();
+  return;
 });
 
 // General authenticated routes - available to all authenticated users
@@ -199,40 +174,55 @@ router.all('/profile', (req, res, next) => {
 router.get('/me', protect, getMeHandler);
 
 
-router.all('/me', (req, res) => {
-  res.set('Allow', 'GET');
-  return res.status(200).json({
-    status: 0,
-    message: 'Method not allowed. Please use GET for this endpoint.'
-  });
+router.all('/me', (req, res, next) => {
+  if (req.method !== 'GET') {
+    res.set('Allow', 'GET');
+    res.status(200).json({
+      status: 0,
+      message: 'Method not allowed. Please use GET for this endpoint.'
+    });
+    return;
+  }
+  next();
 });
 
 router.patch('/profile', protect, updateUserProfile);
-router.all('/profile', (req, res) => {
-  return res.status(200).json({
-    status: 0,
-    message: 'Invalid request method. Please use PATCH for this endpoint.'
-  });
+router.all('/profile', (req, res, next) => {
+  if (req.method !== 'PATCH') {
+    res.status(200).json({
+      status: 0,
+      message: 'Invalid request method. Please use PATCH for this endpoint.'
+    });
+    return;
+  }
+  next();
 });
 
 router.delete('/delete', protect, deleteUserAccount);
-router.all('/delete', (req, res) => {
-  return res.status(200).json({
-    status: 0,
-    message: 'Invalid request method. Please use DELETE for this endpoint.'
-  });
+router.all('/delete', (req, res, next) => {
+  if (req.method !== 'DELETE') {
+    res.status(200).json({
+      status: 0,
+      message: 'Invalid request method. Please use DELETE for this endpoint.'
+    });
+    return;
+  }
+  next();
+  return;
 });
 
 // Change password route with method validation
 router.all('/change-password', (req, res, next) => {
   if (req.method !== 'POST') {
     res.set('Allow', 'POST');
-    return res.status(200).json({
+    res.status(200).json({
       status: 0,
       message: `Invalid request method. Please use POST for this endpoint.`
     });
+    return;
   }
   next();
+  return;
 }, protect, changePassword);
 
 // Admin routes (require admin role) - must be last to not affect other routes

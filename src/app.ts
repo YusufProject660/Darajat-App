@@ -18,8 +18,7 @@ import authRoutes from './modules/users/auth.routes';
 import profileRoutes from './modules/users/routes/profile.routes';
 import gameRoutes from './modules/games/game.routes';
 import dashboardRoutes from './modules/dashboard/dashboard.routes';
-import { initializeSocket } from './modules/games/services/socket.service';
-import { gameService } from './modules/games/services/game.service';
+import { setupSocketHandlers } from './modules/games/socket.handler';
 import { errorMiddleware, notFoundHandler } from './middlewares/error.middleware';
 import { AppError } from './utils/appError';
 import { responseFormatter } from './middlewares/responseFormatter';
@@ -51,9 +50,9 @@ export class App {
     return new Promise((resolve, reject) => {
       const errorHandler = (error: NodeJS.ErrnoException) => {
         if (error.code === 'EADDRINUSE') {
-          console.error(`❌ Port ${this.port} is already in use`);
+          logger.error(`❌ Port ${this.port} is already in use`);
         } else {
-          console.error('❌ Server error:', error);
+          logger.error('❌ Server error:', error);
         }
         reject(error);
         this.server.removeListener('error', errorHandler);
@@ -63,7 +62,7 @@ export class App {
 
       this.server.listen(this.port, () => {
         if (!this.isTestEnv) {
-          console.log(`🚀 Server running on http://localhost:${this.port}`);
+          logger.info(`🚀 Server running on http://localhost:${this.port}`);
         }
         this.server.removeListener('error', errorHandler);
         resolve(this.server);
@@ -130,8 +129,9 @@ export class App {
     this.app.use(
       express.json({
         verify: (req, _res, buf) => {
-          if (req.path.startsWith('/api/auth/')) {
-            (req as any).rawBody = buf?.toString('utf8');
+          const expressReq = req as Request;
+          if (expressReq.path?.startsWith('/api/auth/')) {
+            (expressReq as any).rawBody = buf?.toString('utf8');
           }
         },
       })
@@ -142,7 +142,7 @@ export class App {
       const timeout = 30000; // 30 seconds
       const timer = setTimeout(() => {
         if (!res.headersSent) {
-          console.warn(`⚠️ Request timeout after ${timeout}ms: ${req.method} ${req.originalUrl}`);
+          logger.warn(`⚠️ Request timeout after ${timeout}ms: ${req.method} ${req.originalUrl}`);
           res.status(200).json({
             status: 0,
             message: 'Request timeout. The server is taking too long to respond.',
@@ -158,24 +158,6 @@ export class App {
       next();
     });
 
-    // Add request logging middleware
-    this.app.use((req, res, next) => {
-      console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
-      console.log('Headers:', JSON.stringify(req.headers, null, 2));
-      
-      // Log response
-      const originalSend = res.send;
-      res.send = function(data: any) {
-        console.log('Response:', data);
-        return originalSend.call(this, data);
-      };
-      
-      next();
-    });
-    
-    // Body parsing middleware for URL-encoded data
-    this.app.use(express.urlencoded({ extended: true }));
-    
     // Development-only request logging middleware
     if (process.env.NODE_ENV === 'development') {
       this.app.use((req, res, next) => {
@@ -185,10 +167,10 @@ export class App {
         }
 
         const start = Date.now();
-        const originalEnd = res.end;
+        const originalEnd = res.end.bind(res);
         
-        // @ts-ignore - We're extending the response object
-        res.end = function (chunk, encoding) {
+        // @ts-ignore - We're extending the response object with overloaded signature
+        res.end = function (chunk?: any, encodingOrCb?: BufferEncoding | (() => void), cb?: () => void) {
           const duration = Date.now() - start;
           
           // Clone and sanitize request body for logging
@@ -214,10 +196,11 @@ export class App {
             logData.body = sanitizedBody;
           }
 
-          console.debug('Request:', logData);
+          logger.debug('Request:', logData);
           
-          // Call original end method
-          return originalEnd.call(this, chunk, encoding);
+          // Call original end method - handle overloaded signatures
+          // @ts-ignore - Express res.end has overloaded signatures
+          return originalEnd(chunk, encodingOrCb, cb);
         };
         
         next();
@@ -226,9 +209,6 @@ export class App {
     
     // Serve static files from the public directory
     const publicDir = path.join(__dirname, '../../public');
-    if (process.env.NODE_ENV === 'development') {
-      console.debug(`Serving static files from: ${publicDir}`);
-    }
     this.app.use(express.static(publicDir));
     
     // Add morgan logging
@@ -312,7 +292,7 @@ export class App {
     this.app.set('trust proxy', 1);
     
     // Middleware to preserve empty strings in request body
-    this.app.use((req, res, next) => {
+    this.app.use((req, _res, next) => {
       if (req.body) {
         const preserveEmptyStrings = (obj: any) => {
           if (obj === null || obj === undefined) return obj;
@@ -329,20 +309,10 @@ export class App {
           return obj;
         };
         
-        // Log the body before and after processing for debugging
-        console.log('=== BEFORE PRESERVING EMPTY STRINGS ===');
-        console.log(JSON.stringify(req.body, null, 2));
-        
         preserveEmptyStrings(req.body);
-        
-        console.log('=== AFTER PRESERVING EMPTY STRINGS ===');
-        console.log(JSON.stringify(req.body, null, 2));
-        console.log('====================================');
       }
       next();
     });
-    
-    this.app.use(express.urlencoded({ extended: true }));
     this.app.use(mongoSanitize());
     this.app.use(helmet());
     this.app.use(xss());
@@ -398,25 +368,6 @@ export class App {
     if (dashboardRoutes) this.app.use('/api/dashboard', dashboardRoutes);
 
     this.initializeTestRoutes();
-
-    // Example decks endpoint
-    this.app.get('/api/decks', async (req: Request, res: Response) => {
-      try {
-        const { category, status } = req.query as { category?: string; status?: string };
-        const filter: { status: string; category?: string } = { status: 'active' };
-
-        if (status && status !== 'all') filter.status = status;
-        if (category && category !== 'all') filter.category = category;
-
-        res.apiSuccess(
-          { filter, message: 'Endpoint working. Implement database query here.' },
-          'Decks endpoint working'
-        );
-      } catch (error) {
-        logger.error('Error in /api/decks:', error);
-        res.apiError('Error fetching decks', 'FETCH_DECKS_ERROR');
-      }
-    });
   }
 
   private initializeTestRoutes(): void {
@@ -473,14 +424,26 @@ export class App {
         allowEIO3: true        // Enable compatibility with older clients if needed
       });
 
-      // Initialize socket service with the server and io instance
-      const socketService = initializeSocket(this.server, this.io);
+      // Setup socket handlers (functional approach)
+      setupSocketHandlers(this.io);
       
-      // Pass the socket service to game service
-      if (socketService) {
-        gameService.initialize(this.io);
-        logger.info('✅ Socket.IO server initialized with game service');
-      }
+      // Store socket instance in Express app for controller access
+      this.app.set('io', this.io);
+      
+      // Console log for socket initialization
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log('🔌 SOCKET.IO INITIALIZATION');
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log('✅ Socket.IO server initialized successfully');
+      console.log('Path: /ws/socket.io');
+      console.log('CORS Origin:', process.env.NODE_ENV === 'production' 
+        ? process.env.FRONTEND_URL || 'https://your-production-domain.com'
+        : '*');
+      console.log('Transports:', ['websocket', 'polling']);
+      console.log('Ping Interval: 30s');
+      console.log('Ping Timeout: 60s');
+      console.log('Socket instance stored in app.set("io")');
+      console.log('═══════════════════════════════════════════════════════════');
       
       logger.info('✅ WebSocket server initialized');
 

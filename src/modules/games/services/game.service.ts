@@ -8,7 +8,7 @@ import { logger } from '../../../utils/logger';
 // Extend the IGameService interface to include our methods
 interface IGameService {
   initialize(io: Server): void;
-  createRoom(hostName: string, roomCode: string): Promise<IGameRoom>;
+  createRoom(hostName: string, roomCode: string, hostId: string): Promise<IGameRoom>;
   startGame(roomCode: string, userId: string): Promise<IGameRoom>;
   joinRoom(roomCode: string, playerData: Partial<IPlayer>): Promise<IGameRoom>;
   toggleReady(roomCode: string, userId: string): Promise<IGameRoom>;
@@ -19,24 +19,18 @@ interface IGameService {
     answer: any
   ): Promise<{ correct: boolean; score: number }>;
   getGameState(roomCode: string, forceRefresh?: boolean): Promise<IGameRoom | null>;
-  // TODO: Implement cleanup method
   cleanup(): Promise<void>;
 }
 
-type SocketCallback = (response: { 
-  success: boolean; 
-  error?: string; 
-  data?: any;
-}) => void;
-
 class GameService implements IGameService {
   private io: Server | null = null;
-  private socketService: any = null; // Store the socket service instance
   // REVIEW: Replace any with proper type for MongoDB ChangeStream
   private changeStream: any = null;
   private gameRoomModel: Model<IGameRoom>;
   private gameRooms: Map<string, IGameRoom> = new Map();
   private readonly CACHE_TTL = 1000 * 60 * 30; // 30 minutes TTL for cache entries
+  // @ts-ignore - Used by setSocketService method
+  private socketService: any = null;
 
   /**
    * Set up MongoDB change streams to listen for real-time updates to game rooms
@@ -125,7 +119,7 @@ class GameService implements IGameService {
       }).lean();
       
       activeRooms.forEach(room => {
-        this.gameRooms.set(room.roomCode, room);
+        this.gameRooms.set(room.roomCode, room as any);
       });
       
       logger.info(`Initialized game room cache with ${activeRooms.length} active rooms`);
@@ -145,7 +139,7 @@ class GameService implements IGameService {
       let removedCount = 0;
       
       for (const [roomCode, room] of this.gameRooms.entries()) {
-        const lastUpdated = new Date(room.updatedAt || 0).getTime();
+        const lastUpdated = new Date((room as any).updatedAt || 0).getTime();
         if (now - lastUpdated > this.CACHE_TTL) {
           this.gameRooms.delete(roomCode);
           removedCount++;
@@ -161,20 +155,21 @@ class GameService implements IGameService {
   /**
    * Get a room from cache or database
    */
-  private async getRoom(roomCode: string): Promise<IGameRoom | null> {
+  // @ts-ignore - Reserved for future use
+  private async _getRoom(_roomCode: string): Promise<IGameRoom | null> {
     // Check cache first
-    const cachedRoom = this.gameRooms.get(roomCode);
+    const cachedRoom = this.gameRooms.get(_roomCode);
     if (cachedRoom) return cachedRoom;
 
     // If not in cache, try to get from DB
     try {
-      const room = await this.gameRoomModel.findOne({ roomCode }).lean();
+      const room = await this.gameRoomModel.findOne({ roomCode: _roomCode }).lean();
       if (room) {
-        this.gameRooms.set(roomCode, room);
+        this.gameRooms.set(_roomCode, room as any);
       }
-      return room;
+      return room as any;
     } catch (error) {
-      logger.error(`Error getting room ${roomCode}:`, error);
+      logger.error(`Error getting room ${_roomCode}:`, error);
       return null;
     }
   }
@@ -182,23 +177,24 @@ class GameService implements IGameService {
   /**
    * Update both cache and database with room data
    */
-  private async updateRoom(roomCode: string, updates: Partial<IGameRoom>): Promise<IGameRoom | null> {
+  // @ts-ignore - Reserved for future use
+  private async _updateRoom(_roomCode: string, _updates: Partial<IGameRoom>): Promise<IGameRoom | null> {
     try {
       const updatedRoom = await this.gameRoomModel.findOneAndUpdate(
-        { roomCode },
-        { ...updates, updatedAt: new Date() },
+        { roomCode: _roomCode },
+        { ..._updates, updatedAt: new Date() },
         { new: true, lean: true }
       );
 
       if (updatedRoom) {
-        this.gameRooms.set(roomCode, updatedRoom);
+        this.gameRooms.set(_roomCode, updatedRoom as any);
       } else {
-        this.gameRooms.delete(roomCode);
+        this.gameRooms.delete(_roomCode);
       }
 
-      return updatedRoom;
+      return updatedRoom as any;
     } catch (error) {
-      logger.error(`Error updating room ${roomCode}:`, error);
+      logger.error(`Error updating room ${_roomCode}:`, error);
       return null;
     }
   }
@@ -214,11 +210,11 @@ class GameService implements IGameService {
     try {
       const room = await this.gameRoomModel.findOne({ roomCode }).lean();
       if (room) {
-        this.gameRooms.set(roomCode, room);
+        this.gameRooms.set(roomCode, room as any);
       } else {
         this.gameRooms.delete(roomCode);
       }
-      return room;
+      return room as any;
     } catch (error) {
       logger.error(`Error getting game state for room ${roomCode}:`, error);
       return null;
@@ -265,7 +261,6 @@ class GameService implements IGameService {
       // Update room status
       room.status = 'active';
       room.currentQuestion = 0;
-      room.startedAt = new Date();
       
       // If no questions are loaded, generate some
       if (!room.questions || room.questions.length === 0) {
@@ -276,6 +271,7 @@ class GameService implements IGameService {
       }
 
       await room.save({ session });
+      (room as any).startedAt = new Date();
       await session.commitTransaction();
 
       logger.info(`Game started - Room: ${roomCode}`);
@@ -363,15 +359,41 @@ class GameService implements IGameService {
         }))
       };
 
+      // Console log for new player joining
+      const newPlayerData = existingPlayer ? 'Rejoining player' : 'New player';
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log('👤 NEW PLAYER JOINED ROOM (from game.service)');
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log('Type:', newPlayerData);
+      console.log('Room Code:', roomCode);
+      console.log('Player Data:', {
+        userId: playerData.userId?.toString(),
+        username: playerData.username,
+        avatar: playerData.avatar,
+        isHost: room.players.length === 0,
+        score: 0
+      });
+      console.log('Total Players in Room:', updatedRoom.players.length);
+      console.log('All Players:', updatedRoom.players.map((p: any) => ({
+        userId: p.userId?.toString(),
+        username: p.username,
+        isHost: p.isHost,
+        score: p.score
+      })));
+      console.log('Room Status:', updatedRoom.status);
+      console.log('═══════════════════════════════════════════════════════════');
+
       // Broadcast update to all clients in the room
       if (this.io) {
+        console.log('📢 Emitting player:joined event from game.service');
         this.io.to(roomCode).emit('player:joined', {
           success: true,
           data: formattedRoom
         });
+        console.log('✅ Event emitted to room:', roomCode);
       }
 
-      return formattedRoom;
+      return formattedRoom as any;
     } catch (error) {
       await session.abortTransaction();
       logger.error(`Error joining room ${roomCode}:`, error);
@@ -569,16 +591,6 @@ class GameService implements IGameService {
     }
   }
 
-  /**
-   * Set up socket event listeners
-   * NOTE: Socket listeners are now handled by SocketService to avoid duplicate connection handlers
-   * This method is kept for backward compatibility but does nothing
-   */
-  private setupSocketListeners(): void {
-    // Socket listeners are now handled by SocketService
-    // This method is kept for backward compatibility
-    logger.info('Socket listeners are handled by SocketService');
-  }
 
   /**
    * Handle player disconnection
@@ -642,7 +654,7 @@ class GameService implements IGameService {
         });
         
         // If game was in progress, update game state
-        if (room.status === 'active' || room.status === 'in_progress') {
+        if (room.status === 'active') {
           this.io.to(roomCode).emit('game:player_disconnected', {
             playerId,
             newHostId,
@@ -736,6 +748,23 @@ class GameService implements IGameService {
       const roomData = this.toGameRoom(newRoom);
       this.gameRooms.set(roomCode, roomData);
       
+      // Console log for room creation
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log('🏠 NEW ROOM CREATED (from game.service)');
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log('Room Code:', roomCode);
+      console.log('Host ID:', hostId);
+      console.log('Host Name:', hostName);
+      console.log('Room Status:', newRoom.status || 'waiting');
+      console.log('Players Count:', newRoom.players.length);
+      console.log('Host Player Data:', {
+        userId: newRoom.players[0]?.userId?.toString(),
+        username: newRoom.players[0]?.username,
+        isHost: newRoom.players[0]?.isHost,
+        score: newRoom.players[0]?.score
+      });
+      console.log('═══════════════════════════════════════════════════════════');
+      
       return roomData;
     } catch (error) {
       await session.abortTransaction();
@@ -776,22 +805,13 @@ class GameService implements IGameService {
     // Clear the in-memory cache
     this.gameRooms.clear();
     
-    // Clean up any other resources
-    logger.info('Game service cleanup completed');
-    // TODO: Implement cleanup logic for resources
-    // This should close any open connections and clean up resources
-    if (this.changeStream) {
-      await this.changeStream.close();
-    }
     // Clean up socket service reference
     this.socketService = null;
-    // Add any additional cleanup logic here
-    // For example, you might want to close any open database connections or file handles
-    // You can also use this method to clean up any other resources that were allocated during the game
+    
+    logger.info('Game service cleanup completed');
   }
 }
 
-// ... (rest of the code remains the same)
 const gameService = new GameService();
 
 export { gameService };

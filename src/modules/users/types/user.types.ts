@@ -20,6 +20,8 @@ export interface IUser extends Document {
 export interface AuthResponse {
   id: string;
   username: string;
+  firstName: string;
+  lastName?: string;
   email: string;
   avatar?: string;
   role: 'player' | 'admin';

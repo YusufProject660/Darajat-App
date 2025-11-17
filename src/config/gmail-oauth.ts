@@ -1,6 +1,7 @@
 import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
 import { config } from './env';
+import { logger } from '../utils/logger';
 
 const OAuth2 = google.auth.OAuth2;
 
@@ -18,7 +19,7 @@ const createTransporter = async () => {
   const accessToken = await new Promise((resolve, reject) => {
     oauth2Client.getAccessToken((err, token) => {
       if (err) {
-        console.error('Error getting access token:', err);
+        logger.error('Error getting access token:', err);
         reject(err);
       }
       resolve(token);
@@ -26,18 +27,17 @@ const createTransporter = async () => {
   });
 
   const transporter = nodemailer.createTransport({
-    service: 'gmail',
     auth: {
       type: 'OAuth2',
       user: process.env.EMAIL_USER || config.email?.user,
-      accessToken,
+      accessToken: accessToken as string,
       clientId: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       refreshToken: process.env.GOOGLE_REFRESH_TOKEN
     },
     debug: false,
     logger: false
-  });
+  } as any);
 
   return transporter;
 };

@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
-import _ from 'lodash';
 
 import { AppError } from '../../utils/appError';
 import { GameRoom, IPlayer, IAnsweredQuestion } from './models/gameRoom.model';
@@ -16,8 +15,7 @@ import { logger } from '../../utils/logger';
  * Clean up game object before sending in response
  */
 const cleanGameResponse = (game: any) => {
-  // Create a deep clone to avoid mutating the original object
-  const cleanedGame = _.cloneDeep(game);
+  const cleanedGame = JSON.parse(JSON.stringify(game));
   
   // Remove the specified fields
   const fieldsToRemove = [
@@ -85,114 +83,52 @@ interface IGameLobbyRequest extends Request {
   user?: IUser;
 }
 
+interface IFinishGameRequest extends Request {
+  params: {
+    roomCode: string;
+  };
+  user?: IUser;
+}
+
 /**
  * @desc    Create a new game room
  * @route   POST /api/game/create
  * @access  Private
  */
- const createGame = async (req: IGameRequest, res: Response, next: NextFunction) => {
+const createGame = async (req: IGameRequest, res: Response) => {
   try {
-    // Log the raw request details at the very start
-    console.log('=== GAME CONTROLLER - START ===');
-
-    // The categories are already processed and validated by the middleware
-    // Just log them for debugging
-    console.log('Processed categories from validation:', JSON.stringify(req.body.categories, null, 2));
-
-    // Convert camelCase keys to snake_case
-    if (req.body.numberOfQuestions !== undefined) {
-      req.body.number_of_questions = req.body.numberOfQuestions;
-      delete req.body.numberOfQuestions;
-    }
-
-    if (req.body.maximumPlayers !== undefined) {
-      req.body.maximum_player = req.body.maximumPlayers;
-      delete req.body.maximumPlayers;
-    }
-    console.log('Raw body from request:', JSON.stringify((req as any).rawBody, null, 2));
-    console.log('Parsed body from request:', JSON.stringify(req.body, null, 2));
-    console.log('Request headers:', JSON.stringify(req.headers, null, 2));
-    console.log('Request method:', req.method);
-    console.log('Request URL:', req.originalUrl);
-    console.log('Request IP:', req.ip);
-    console.log('=== GAME CONTROLLER - END ===');
-    // Log raw request details at the very start
-    console.log('=== RAW REQUEST BODY ===');
-    console.log('Raw body:', JSON.stringify(req.body, null, 2));
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('========================');
-
     if (!req.user) {
       return res.apiError('User not authenticated', 'UNAUTHORIZED');
     }
 
-    // Validate request body
     const { categories = {}, numberOfQuestions = 10, maximumPlayers = 4 } = req.body;
-    
-    // UNUSED: Variables declared but not used
-    // const questionsToShuffle: any[] = [];
-    // let currentQuestionIndex = 0;
-    // let gameStatus = 'waiting';
 
-    // Categories are already validated by the middleware
-    // Just log them for debugging
-    console.log('Validated categories:', JSON.stringify(categories, null, 2));
-
-    // Validate number of questions
     if (typeof numberOfQuestions !== 'number' || numberOfQuestions < 1 || numberOfQuestions > 60) {
-      logger.error('[createGame] 400: invalid numberOfQuestions');
       return res.apiError('Number of questions must be between 1 and 60', 'INVALID_INPUT');
     }
 
-    // Validate maximum players
     if (isNaN(Number(maximumPlayers)) || !Number.isInteger(Number(maximumPlayers)) || 
         Number(maximumPlayers) < 2 || Number(maximumPlayers) > 10) {
-      logger.error(`[createGame] 200: invalid maximumPlayers: ${maximumPlayers}`);
-      return res.status(200).json({
-        status: 0,
-        message: 'Maximum players must be an integer between 2 and 10'
-      });
+      return res.apiError('Maximum players must be an integer between 2 and 10', 'INVALID_INPUT');
     }
 
-    // Process categories into the required format and collect enabled categories
     const processedCategories = new Map();
     const enabledCategories: Array<{category: string, difficulty: string}> = [];
 
-    // Categories are already validated by the middleware
-    // Just process them for the game
     for (const [category, settings] of Object.entries(categories as Record<string, any>)) {
       if (settings?.enabled) {
+        processedCategories.set(category, {
+          enabled: true,
+          difficulty: settings.difficulty
+        });
         enabledCategories.push({
           category: settings.name || category.toLowerCase(),
           difficulty: settings.difficulty || 'easy'
         });
-      }
-    }
-
-    // Debug: Log that we're starting the second pass
-    console.log('Starting second pass - processing categories');
-    
-    // Process the categories (validation already passed in first pass)
-    for (const [category, settings] of Object.entries(categories as Record<string, any>)) {
-      console.log(`Processing category: ${category}`, JSON.stringify(settings, null, 2));
-      
-      if (settings?.enabled) {
-        console.log(`Adding enabled category: ${category} with difficulty:`, settings.difficulty);
-        
-        processedCategories.set(category, {
-          enabled: true,
-          difficulty: settings.difficulty // Already validated and normalized in first pass
-        });
-        
-        enabledCategories.push({
-          category,
-          difficulty: settings.difficulty
-        });
       } else {
-        // For disabled categories, we don't need to process difficulty
         processedCategories.set(category, {
           enabled: false,
-          difficulty: 'easy' // Default value for disabled categories
+          difficulty: 'easy'
         });
       }
     }
@@ -279,25 +215,19 @@ interface IGameLobbyRequest extends Request {
 
       const saved = await newRoom.save();
       
-      // Populate the game with questions and player details
       const populatedGame = await GameRoom.findById(saved._id)
         .populate({
           path: 'players.userId',
           select: 'username avatar'
         })
         .populate('questions')
-        .lean();
+        .lean() as any;
 
-      // Convert the Map to a plain object for the response
-      if (populatedGame) {
+      if (populatedGame?.settings) {
         populatedGame.settings.categories = Object.fromEntries(processedCategories);
       }
 
-      // Clean up the response before sending
-      const cleanedGame = cleanGameResponse(populatedGame);
-      
-      // Use the centralized response format
-      return res.apiSuccess(cleanedGame, 'Game created successfully');
+      return res.apiSuccess(cleanGameResponse(populatedGame), 'Game created successfully');
     } catch (error) {
       logger.error('Error in createGame:', error);
       return res.apiError('Failed to create game room', 'GAME_CREATION_FAILED');
@@ -313,7 +243,7 @@ interface IGameLobbyRequest extends Request {
  * @route   POST /api/game/join
  * @access  Private
  */
- const joinGame = async (req: IRequestWithUser, res: Response, next: NextFunction) => {
+const joinGame = async (req: IRequestWithUser, res: Response) => {
   try {
     if (!req.user) {
       return res.apiError('User not authenticated', 'UNAUTHORIZED');
@@ -383,7 +313,7 @@ interface IGameLobbyRequest extends Request {
   }
 };
 
- const getGameRoom = async (req: Request, res: Response, next: NextFunction) => {
+const getGameRoom = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { code } = req.params;
 
@@ -451,17 +381,6 @@ interface ISubmitAnswerRequest extends Request {
   user?: IUser;
 }
 
-// UNUSED: Not used in the visible code
-// interface PlayerStats {
-//   userId: string;
-//   username: string;
-//   avatar?: string;
-//   points: number;
-//   accuracy: number;
-//   averageTime: number;
-//   correctAnswers: number;
-//   totalQuestionsAnswered: number;
-// }
 
 /**
  * @desc    Get all questions for a game room
@@ -483,51 +402,29 @@ interface ISubmitAnswerRequest extends Request {
       return res.apiError('Game room not found', 'NOT_FOUND');
     }
 
-    // Get question IDs from the room
-    const questionIds = gameRoom.questions.map(id => id.toString());
-    
-    // Fetch questions with all necessary fields
+    const questionIds = gameRoom.questions.map((id: any) => id.toString());
     const questions = await Question.find(
       { _id: { $in: questionIds } },
       'question options difficulty category correctAnswer explanation source'
     ).lean();
-    
-    logger.debug('Fetched questions:', { questions });
 
-    if (!gameRoom) {
-      return res.apiError('Game room not found', 'NOT_FOUND');
-    }
-
-    // Check if user is a player in this game
     const isPlayer = gameRoom.players.some(
-      player => player.userId.toString() === req.user!._id.toString()
+      (player: IPlayer) => player.userId.toString() === req.user!._id.toString()
     );
 
     if (!isPlayer) {
       return res.apiError('You are not a player in this game', 'FORBIDDEN');
     }
 
-    // Map questions to ensure consistent response format
-    const formattedQuestions = questions.map(q => {
-      // Debug log each question
-      logger.debug('Processing question:', {
-        id: q._id,
-        hasQuestion: !!q.question,
-        question: q.question,
-        options: q.options?.length
-      });
-      
-      return {
-        _id: q._id,
-        question: q.question || 'No question available',
-        options: q.options || [],
-        difficulty: q.difficulty || 'medium',
-        category: q.category || 'General',
-        // Removed correctAnswer from response to prevent cheating
-        explanation: q.explanation,
-        source: q.source
-      };
-    });
+    const formattedQuestions = questions.map((q: any) => ({
+      _id: q._id,
+      question: q.question || 'No question available',
+      options: q.options || [],
+      difficulty: q.difficulty || 'medium',
+      category: q.category || 'General',
+      explanation: q.explanation,
+      source: q.source
+    }));
 
     return res.apiSuccess({
       roomCode: gameRoom.roomCode,
@@ -686,7 +583,7 @@ const getGameSummary = async (req: Request, res: Response, next: NextFunction) =
     return res.apiError(
       'Server error', 
       'INTERNAL_ERROR',
-      process.env.NODE_ENV === 'development' ? { details: error.message } : undefined
+      process.env.NODE_ENV === 'development' ? { details: error instanceof Error ? error.message : 'Unknown error' } : undefined
     );
   }
 };
@@ -716,7 +613,7 @@ interface IGameLeaderboardRequest extends Request {
  * @route   GET /api/game/leaderboard/:roomCode
  * @access  Private
  */
- const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, next: NextFunction) => {
+const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, next: NextFunction) => {
   try {
     const { roomCode } = req.params;
 
@@ -727,7 +624,6 @@ interface IGameLeaderboardRequest extends Request {
       });
     }
 
-    // Find the game room with populated players
     const gameRoom = await GameRoom.findOne({ roomCode })
       .populate({
         path: 'players.userId',
@@ -741,7 +637,6 @@ interface IGameLeaderboardRequest extends Request {
       });
     }
 
-    // Check if game is completed
     if (gameRoom.status !== 'finished') {
       return res.status(200).json({
         status: 0,
@@ -749,7 +644,6 @@ interface IGameLeaderboardRequest extends Request {
       });
     }
 
-    // Check if user is a participant in this game
     const userId = req.user!._id.toString();
     const isParticipant = gameRoom.players.some((player: any) => 
       player.userId && player.userId._id.toString() === userId
@@ -762,16 +656,7 @@ interface IGameLeaderboardRequest extends Request {
       });
     }
 
-    // Calculate player stats
     const playerStats: PlayerStats[] = [];
-    
-    // Ensure we have a valid game room
-    if (!gameRoom) {
-      return res.status(200).json({
-        status: 0,
-        message: 'Game room not found'
-      });
-    }
     
     for (const player of gameRoom.players as IPlayer[]) {
       // Skip if userId is not populated or is a string
@@ -841,7 +726,7 @@ interface IGameLeaderboardRequest extends Request {
       averageTime: player.averageTime
     }));
 
-    res.status(200).json({
+    return res.status(200).json({
       status: 1,
       message: 'Leaderboard fetched successfully.',
       data: {
@@ -852,7 +737,7 @@ interface IGameLeaderboardRequest extends Request {
     });
   } catch (error) {
     logger.error('Error in getGameLeaderboard:', error);
-    next(new AppError('Failed to get game leaderboard', 500));
+    return next(new AppError('Failed to get game leaderboard', 500));
   }
 };
 
@@ -861,7 +746,7 @@ interface IGameLeaderboardRequest extends Request {
  * @route   PATCH /api/games/finish/:roomCode
  * @access  Private
  */
-const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunction) => {
+const finishGame = async (req: IFinishGameRequest, res: Response) => {
   const { roomCode } = req.params;
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1207,7 +1092,6 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       // Update player score
       player.score += points;
 
-      // Add to answered questions
       gameRoom.answeredQuestions.push({
         playerId: userId,
         questionId,
@@ -1218,6 +1102,71 @@ const finishGame = async (req: IFinishGameRequest, res: Response, next: NextFunc
       });
 
       await gameRoom.save();
+
+      const io = (req as any).app?.get('io');
+      if (io) {
+        io.to(roomCode).emit('question:answered', {
+          playerId: userId.toString(),
+          isCorrect,
+          correctAnswer: question.correctAnswer,
+          score: player.score
+        });
+      }
+
+      const allPlayersAnswered = gameRoom.players.every((p: IPlayer) =>
+        gameRoom.answeredQuestions.some((aq: IAnsweredQuestion) =>
+          aq.playerId.toString() === p.userId.toString() &&
+          aq.questionId.toString() === questionId
+        )
+      );
+
+      if (allPlayersAnswered) {
+        const nextQuestionIndex = (gameRoom.currentQuestion || 0) + 1;
+        if (nextQuestionIndex < gameRoom.questions.length) {
+          gameRoom.currentQuestion = nextQuestionIndex;
+          await gameRoom.save();
+          
+          const nextQuestion = await Question.findById(gameRoom.questions[nextQuestionIndex]);
+          if (io && nextQuestion) {
+            io.to(roomCode).emit('question:new', {
+              question: {
+                id: (nextQuestion._id as any).toString(),
+                question: nextQuestion.question,
+                options: nextQuestion.options,
+                category: nextQuestion.category,
+                difficulty: nextQuestion.difficulty
+              },
+              questionIndex: nextQuestionIndex,
+              totalQuestions: gameRoom.questions.length,
+              timeLimit: 30
+            });
+          }
+        } else {
+          gameRoom.status = 'finished';
+          gameRoom.finishedAt = new Date();
+          await gameRoom.save();
+          
+          if (io) {
+            io.to(roomCode).emit('game:ended', {
+              leaderboard: gameRoom.players
+                .sort((a: IPlayer, b: IPlayer) => (b.score || 0) - (a.score || 0))
+                .map((p: IPlayer) => ({
+                  id: p.userId.toString(),
+                  name: p.username,
+                  score: p.score || 0,
+                  isHost: p.isHost
+                })),
+              totalQuestions: gameRoom.questions.length,
+              players: gameRoom.players.map((p: IPlayer) => ({
+                id: p.userId.toString(),
+                username: p.username,
+                score: p.score || 0,
+                isHost: p.isHost
+              }))
+            });
+          }
+        }
+      }
 
       return res.status(200).json({
         status: 1,
@@ -1249,93 +1198,84 @@ const startGame = async (req: Request, res: Response, next: NextFunction) => {
     const { roomCode } = req.params;
     const userId = (req as any).user?._id;
 
-    // Find the game room
-    const game = await GameRoom.findOne({ roomCode });
+    const game = await GameRoom.findOne({ roomCode }).populate('questions');
     if (!game) {
       return res.apiError('Game room not found', 'ROOM_NOT_FOUND');
     }
 
-    // Check if the user is the host
     const isHost = game.players.some(
-      p => p.userId.toString() === userId.toString() && p.isHost
+      (p: IPlayer) => p.userId.toString() === userId.toString() && p.isHost
     );
 
     if (!isHost) {
       return res.apiError('Only the host can start the game', 'NOT_HOST');
     }
 
-    // Check if all players are ready
-    const allPlayersReady = game.players.every(player => player.isReady || player.isHost);
+    const allPlayersReady = game.players.every((player: IPlayer) => player.isReady || player.isHost);
     if (!allPlayersReady) {
       return res.apiError('All players must be ready before starting the game', 'PLAYERS_NOT_READY');
     }
 
-    // Check if there are at least 2 players
     if (game.players.length < 2) {
       return res.apiError('At least 2 players are required to start the game', 'INSUFFICIENT_PLAYERS');
     }
 
-    logger.info(`Starting game for room: ${game.roomCode}, user: ${userId}`);
-    
-    // Start the game and get updated room with populated data
     const updatedGame = await gameService.startGame(game.roomCode, userId);
-    
     if (!updatedGame) {
-      throw new Error('Failed to start game: No game data returned');
+      return res.apiError('Failed to start game', 'START_GAME_ERROR');
     }
 
-    // Log the successful start
-    logger.info('Game started successfully', {
-      gameId: updatedGame._id,
-      status: updatedGame.status,
-      playerCount: updatedGame.players?.length || 0,
-      questionCount: updatedGame.questions?.length || 0
-    });
+    const populatedGame = await GameRoom.findOne({ roomCode })
+      .populate('questions')
+      .populate('players.userId', 'username avatar')
+      .lean() as any;
 
-    // Extract the first question if available
-    const firstQuestion = updatedGame.questions?.[0] 
-      ? {
-          _id: updatedGame.questions[0]._id?.toString(),
-          question: updatedGame.questions[0].question,
-          options: updatedGame.questions[0].options,
-          category: updatedGame.questions[0].category,
-          difficulty: updatedGame.questions[0].difficulty,
-          timeLimit: updatedGame.questions[0].timeLimit
-        }
-      : null;
-    
-    // Return the success response with 200 status code
+    const firstQuestion = populatedGame?.questions?.[0] ? {
+      _id: populatedGame.questions[0]._id?.toString(),
+      question: populatedGame.questions[0].question,
+      options: populatedGame.questions[0].options,
+      category: populatedGame.questions[0].category,
+      difficulty: populatedGame.questions[0].difficulty
+    } : null;
+
+    const io = (req as any).app?.get('io');
+    if (io) {
+      io.to(roomCode).emit('game:started', {
+        firstQuestion,
+        timeLimit: 30,
+        totalQuestions: populatedGame?.questions?.length || 0
+      });
+    }
+
     return res.status(200).json({
       status: 1,
       message: 'Game started successfully',
       data: {
         game: {
-          id: updatedGame._id.toString(),
-          roomCode: updatedGame.roomCode,
-          status: updatedGame.status,
-          playerCount: updatedGame.players?.length || 0,
-          questionCount: updatedGame.questions?.length || 0,
-          currentQuestionIndex: updatedGame.currentQuestionIndex || 0,
-          settings: updatedGame.settings || {}
+          id: populatedGame?._id?.toString(),
+          roomCode: populatedGame?.roomCode,
+          status: 'active',
+          playerCount: populatedGame?.players?.length || 0,
+          questionCount: populatedGame?.questions?.length || 0,
+          currentQuestion: 0
         },
         firstQuestion,
-        totalQuestions: updatedGame.questions?.length || 0
+        totalQuestions: populatedGame?.questions?.length || 0
       }
     });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
 // @desc    Kick a player from the game
 // @route   POST /api/game/:roomCode/players/:playerId/kick
 // @access  Private (Host only)
-const kickPlayer = async (req: Request, res: Response, next: NextFunction) => {
+const kickPlayer = async (req: Request, res: Response) => {
   try {
     const { playerId } = req.params;
     const game = (req as any).game;
     
-    // Check if player exists in the game
     const playerIndex = game.players.findIndex(
       (p: IPlayer) => p.userId.toString() === playerId
     );
@@ -1347,21 +1287,30 @@ const kickPlayer = async (req: Request, res: Response, next: NextFunction) => {
       });
     }
     
-    // Remove player from the game
+    const wasHost = game.players[playerIndex].isHost;
     game.players.splice(playerIndex, 1);
+    
+    if (wasHost && game.players.length > 0) {
+      game.players[0].isHost = true;
+      game.hostId = game.players[0].userId;
+    }
+    
     await game.save();
     
-    // TODO: Notify the kicked player via WebSocket
+    const io = (req as any).app?.get('io');
+    if (io) {
+      io.to(game.roomCode).emit('player:left', { playerId });
+    }
     
-    res.status(200).json({
+    return res.status(200).json({
       status: 1,
       message: 'Player has been kicked from the game',
       data: {}
     });
   } catch (error) {
-    res.status(200).json({
+    return res.status(200).json({
       status: 0,
-      message: error.message || 'Failed to kick player'
+      message: error instanceof Error ? error.message : 'Failed to kick player'
     });
   }
 };
@@ -1506,58 +1455,57 @@ const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: NextFun
       return next(new AppError('User not authenticated', 401));
     }
 
-    // Get the game room with populated players using gameService
     const gameRoom = await GameRoom.findOne({ roomCode })
       .populate('players.userId')
       .populate('hostId')
-      .lean();
+      .lean() as any;
 
     if (!gameRoom) {
-      return next(new AppError('Game room not found', 200));
+      return next(new AppError('Game room not found', 404));
     }
 
-    // Check if the user is a player in this game
-    const isPlayer = gameRoom.players.some(player => player.userId._id.toString() === userId.toString());
+    const isPlayer = gameRoom.players?.some((player: any) => 
+      player.userId?._id?.toString() === userId.toString()
+    );
     
-    if (!isPlayer && gameRoom.hostId.toString() !== userId.toString()) {
+    if (!isPlayer && gameRoom.hostId?.toString() !== userId.toString()) {
       return next(new AppError('You are not a member of this game', 403));
     }
 
-    // Prepare the response
     const response = {
       roomCode: gameRoom.roomCode,
       status: gameRoom.status,
       host: {
-        id: gameRoom.hostId._id,
-        username: typeof gameRoom.hostId === 'object' ? (gameRoom.hostId as any).username : 'Unknown'
+        id: gameRoom.hostId?._id || gameRoom.hostId,
+        username: gameRoom.hostId?.username || 'Unknown'
       },
-      players: gameRoom.players.map(player => ({
-        id: player.userId._id,
-        username: player.userId.username,
+      players: (gameRoom.players || []).map((player: any) => ({
+        id: player.userId?._id || player.userId,
+        username: player.userId?.username || player.username,
         avatar: player.avatar,
         isHost: player.isHost,
         isReady: player.isReady,
         score: player.score
       })),
       settings: {
-        maxPlayers: gameRoom.settings.maximumPlayers,
-        numberOfQuestions: gameRoom.settings.numberOfQuestions,
-        selectedCategories: Object.entries(gameRoom.settings.categories || {})
-          .filter(([_, cat]) => cat.enabled)
-          .map(([id, cat]) => ({
+        maxPlayers: gameRoom.settings?.maximumPlayers,
+        numberOfQuestions: gameRoom.settings?.numberOfQuestions,
+        selectedCategories: Object.entries(gameRoom.settings?.categories || {})
+          .filter(([_, cat]: [string, any]) => cat?.enabled)
+          .map(([id, cat]: [string, any]) => ({
             id,
-            difficulty: cat.difficulty
+            difficulty: cat?.difficulty
           }))
       },
-      currentPlayers: gameRoom.players.length,
-      isFull: gameRoom.players.length >= gameRoom.settings.maximumPlayers,
+      currentPlayers: gameRoom.players?.length || 0,
+      isFull: (gameRoom.players?.length || 0) >= (gameRoom.settings?.maximumPlayers || 0),
       gameStarted: gameRoom.status !== 'waiting'
     };
 
-    res.apiSuccess(response);
+    return res.apiSuccess(response);
   } catch (error) {
     logger.error('Error in getGameLobby:', error);
-    next(new AppError('Failed to get game lobby', 500));
+    return next(new AppError('Failed to get game lobby', 500));
   }
 };
 
@@ -1575,7 +1523,7 @@ interface IGetMyGamesRequest extends Request {
  * @route   GET /api/game/my-games
  * @access  Private
  */
-export const getMyGames = async (req: IGetMyGamesRequest, res: Response) => {
+const getMyGames = async (req: IGetMyGamesRequest, res: Response) => {
   try {
     const userId = req.user?._id;
     
@@ -1607,18 +1555,12 @@ export const getMyGames = async (req: IGetMyGamesRequest, res: Response) => {
       });
     }
 
-    // Format the response with only necessary fields
-    const formattedGames = games.map(game => {
-      // Extract enabled categories
+    const formattedGames = games.map((game: any) => {
       const enabledCategories = Object.entries(game.settings?.categories || {})
-        .filter(([_, isEnabled]) => isEnabled)
+        .filter(([_, cat]: [string, any]) => cat?.enabled)
         .map(([category]) => category);
 
-      // Extract difficulty levels
-      const difficultyLevels = game.settings?.difficultyLevels || {};
-
-      // Format players
-      const players = game.players?.map(player => ({
+      const players = game.players?.map((player: any) => ({
         username: player.username,
         score: player.score || 0,
         isHost: player.userId?.toString() === game.hostId?.toString()
@@ -1643,7 +1585,7 @@ export const getMyGames = async (req: IGetMyGamesRequest, res: Response) => {
       data: formattedGames
     });
   } catch (error) {
-    console.error('Error fetching user games:', error);
+    logger.error('Error fetching user games:', error);
     return res.apiError('Something went wrong', 'FETCH_GAMES_ERROR');
   }
 };
@@ -1702,12 +1644,13 @@ const toggleReadyStatus = async (req: IToggleReadyStatusRequest, res: Response, 
     gameRoom.players[playerIndex].isReady = isReady;
     await gameRoom.save();
 
-    // Emit socket event to notify other players
-    // This requires your socket implementation to be set up
-    // io.to(roomCode).emit('playerReadyStatusChanged', {
-    //   playerId: userId,
-    //   isReady
-    // });
+    const io = (req as any).app?.get('io');
+    if (io) {
+      io.to(roomCode).emit('player:ready', {
+        playerId: userId.toString(),
+        isReady
+      });
+    }
 
     res.apiSuccess({
       playerId: userId,
@@ -1737,3 +1680,4 @@ export {
   toggleReadyStatus,
   getMyGames
 };
+

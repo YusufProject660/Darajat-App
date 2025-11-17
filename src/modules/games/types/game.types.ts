@@ -85,7 +85,7 @@ export interface ClientEvents {
   
   // Player Actions
   'player:ready': (data: { isReady: boolean }) => void;
-  'answer:submit': (data: { answer: string }) => void;
+  'answer:submit': (data: { questionId: string; answer: any }, callback?: (response: { success: boolean; error?: string; data?: any }) => void) => void;
   'question:next': () => void;
   
   // Chat
@@ -187,7 +187,9 @@ export interface InterServerEvents {
 export interface SocketUser {
   id: string;
   username: string;
+  email?: string;
   avatar?: string;
+  role?: string;
   isHost?: boolean;
 }
 

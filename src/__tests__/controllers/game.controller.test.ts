@@ -95,7 +95,7 @@ await GameRoom.deleteMany({});
 // ---- CREATE GAME ----
 describe('POST /api/game/create', () => {
 it('should create a new game room with valid data', async () => {
-  const mockSave = jest.fn().mockImplementation(function() {
+  const mockSave = jest.fn().mockImplementation(function(this: any) {
     return Promise.resolve(this);
   });
 
@@ -129,7 +129,7 @@ it('should create a new game room with valid data', async () => {
     createdAt: new Date(),
     updatedAt: new Date(),
     save: mockSave,
-    populate: jest.fn().mockImplementation(function() { return Promise.resolve(this); }),
+    populate: jest.fn().mockImplementation(function(this: any) { return Promise.resolve(this); }),
     toObject: function() {
       return {
         _id: this._id,
@@ -219,7 +219,7 @@ describe('POST /api/game/join', () => {
         maximumPlayers: 4
       },
       status: 'waiting',
-      save: jest.fn().mockImplementation(function() {
+      save: jest.fn().mockImplementation(function(this: any) {
         return Promise.resolve(this);
       }),
       toObject: function() {

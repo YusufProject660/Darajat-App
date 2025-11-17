@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { Dashboard } from './dashboard.model';
+import { logger } from '../../utils/logger';
 
 interface IDashboardData {
   banner: {
@@ -34,15 +35,16 @@ export const getDashboardData = async (_req: Request, res: Response): Promise<vo
       .lean<IDashboardData>();
     
     if (!dashboardData) {
-      return res.apiError('Dashboard configuration not found.', 'DASHBOARD_NOT_FOUND');
+      res.apiError('Dashboard configuration not found.', 'DASHBOARD_NOT_FOUND');
+      return;
     }
 
     // Prepare and send success response with only funGames
-    return res.apiSuccess({
+    res.apiSuccess({
       funGames: dashboardData.funGames || []
     }, 'Dashboard data fetched successfully');
   } catch (error) {
-    console.error('Error fetching dashboard data:', error);
-    return res.apiError('Unable to fetch dashboard data at the moment. Please try again later.', 'DASHBOARD_FETCH_ERROR');
+    logger.error('Error fetching dashboard data:', error);
+    res.apiError('Unable to fetch dashboard data at the moment. Please try again later.', 'DASHBOARD_FETCH_ERROR');
   }
 };

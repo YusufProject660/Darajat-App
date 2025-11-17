@@ -1,4 +1,4 @@
-import { ClientSession, Types } from 'mongoose';
+import { ClientSession } from 'mongoose';
 import { GameRoom as GameRoomModel } from '../models/gameRoom.model';
 import { GameRoom, Player } from '../types/game.types';
 

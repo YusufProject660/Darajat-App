@@ -1,5 +1,4 @@
 import { Response, NextFunction } from 'express';
-import { AppError } from '../utils/appError';
 
 declare global {
   namespace Express {

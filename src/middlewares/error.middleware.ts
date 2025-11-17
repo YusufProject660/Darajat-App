@@ -1,11 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../utils/appError';
+import { logger } from '../utils/logger';
 
 export const errorMiddleware = (err: any, _req: Request, res: Response, _next: NextFunction) => {
   let error = err;
 
   if (process.env.NODE_ENV === 'development') {
-    console.error('Error:', {
+    logger.error('Error:', {
       status: error.statusCode,
       message: error.message,
       stack: error.stack,

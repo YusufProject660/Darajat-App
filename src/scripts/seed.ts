@@ -1,6 +1,5 @@
 import mongoose from 'mongoose';
 import { connectDB } from '../config/db';
-import { config } from '../config/env';
 
 // Interface for Dashboard document
 interface IDashboard extends mongoose.Document {
