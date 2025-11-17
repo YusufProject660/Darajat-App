@@ -132,7 +132,7 @@ Thumbs.db
 *.sublime-project
 
 # Build output
-dist/
+
 build/
 coverage/
 

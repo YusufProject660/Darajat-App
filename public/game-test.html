@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Darajat Game - Socket Test</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            padding: 25px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            border-left: 5px solid #667eea;
+        }
+
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-weight: 500;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .log-container {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            margin-top: 20px;
+        }
+
+        .log-entry {
+            margin-bottom: 8px;
+            padding: 5px;
+            border-left: 3px solid transparent;
+        }
+
+        .log-entry.success {
+            border-left-color: #4caf50;
+            color: #4caf50;
+        }
+
+        .log-entry.error {
+            border-left-color: #f44336;
+            color: #f44336;
+        }
+
+        .log-entry.info {
+            border-left-color: #2196f3;
+            color: #2196f3;
+        }
+
+        .log-entry.warning {
+            border-left-color: #ff9800;
+            color: #ff9800;
+        }
+
+        .user-info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .user-info h3 {
+            color: #1976d2;
+            margin-bottom: 10px;
+        }
+
+        .user-info p {
+            margin: 5px 0;
+            color: #555;
+        }
+
+        .room-info {
+            background: #fff3e0;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .room-info h3 {
+            color: #e65100;
+            margin-bottom: 10px;
+        }
+
+        .players-list {
+            margin-top: 10px;
+        }
+
+        .player-item {
+            background: white;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge.host {
+            background: #4caf50;
+            color: white;
+        }
+
+        .badge.player {
+            background: #2196f3;
+            color: white;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .instructions {
+            background: #fff9c4;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 5px solid #fbc02d;
+        }
+
+        .instructions h3 {
+            color: #f57f17;
+            margin-bottom: 15px;
+        }
+
+        .instructions ol {
+            margin-left: 20px;
+        }
+
+        .instructions li {
+            margin: 10px 0;
+            color: #555;
+        }
+
+        .code-block {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎮 Darajat Game - Socket Test</h1>
+            <p>Test Socket.IO Connection, Login, Create & Join Rooms</p>
+        </div>
+
+        <div class="content">
+            <!-- Instructions -->
+            <div class="instructions">
+                <h3>📋 How to Use:</h3>
+                <ol>
+                    <li><strong>Step 1:</strong> Login with your email and password</li>
+                    <li><strong>Step 2:</strong> After login, you'll get a JWT token</li>
+                    <li><strong>Step 3:</strong> Socket will automatically connect with the token</li>
+                    <li><strong>Step 4:</strong> Create a room or join an existing room</li>
+                    <li><strong>Step 5:</strong> Watch the logs for real-time events</li>
+                </ol>
+                <div class="code-block">
+                    <strong>Server URL:</strong> http://localhost:5000<br>
+                    <strong>Socket Path:</strong> /ws/socket.io<br>
+                    <strong>API Endpoint:</strong> /api/auth/login
+                </div>
+            </div>
+
+            <!-- Login Section -->
+            <div class="section" id="loginSection">
+                <h2>🔐 Step 1: Login</h2>
+                <div class="form-group">
+                    <label for="email">Email:</label>
+                    <input type="email" id="email" placeholder="Enter your email" value="test@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password:</label>
+                    <input type="password" id="password" placeholder="Enter your password" value="password123">
+                </div>
+                <button onclick="login()">Login</button>
+                <div id="loginStatus"></div>
+            </div>
+
+            <!-- User Info Section -->
+            <div class="section hidden" id="userSection">
+                <h2>👤 User Info</h2>
+                <div class="user-info" id="userInfo"></div>
+            </div>
+
+            <!-- Socket Connection Section -->
+            <div class="section hidden" id="socketSection">
+                <h2>🔌 Socket Connection</h2>
+                <div id="socketStatus"></div>
+                <button onclick="connectSocket()" id="connectBtn">Connect Socket</button>
+            </div>
+
+            <!-- Room Creation Section -->
+            <div class="section hidden" id="roomSection">
+                <h2>🏠 Room Management</h2>
+                
+                <h3 style="margin-top: 20px; color: #667eea;">Create Room</h3>
+                <div class="form-group">
+                    <label for="roomCode">Room Code:</label>
+                    <input type="text" id="roomCode" placeholder="Enter room code (e.g., TEST123)" value="">
+                </div>
+                <div class="form-group">
+                    <label for="playerName">Your Name:</label>
+                    <input type="text" id="playerName" placeholder="Enter your name" value="">
+                </div>
+                <button onclick="createRoom()">Create Room</button>
+                <div id="createRoomStatus"></div>
+
+                <h3 style="margin-top: 30px; color: #667eea;">Join Room</h3>
+                <div class="form-group">
+                    <label for="joinRoomCode">Room Code to Join:</label>
+                    <input type="text" id="joinRoomCode" placeholder="Enter room code to join" value="">
+                </div>
+                <div class="form-group">
+                    <label for="joinPlayerName">Your Name:</label>
+                    <input type="text" id="joinPlayerName" placeholder="Enter your name" value="">
+                </div>
+                <button onclick="joinRoom()">Join Room</button>
+                <div id="joinRoomStatus"></div>
+
+                <div id="roomInfo" class="room-info hidden"></div>
+            </div>
+
+            <!-- Logs Section -->
+            <div class="section">
+                <h2>📝 Event Logs</h2>
+                <button onclick="clearLogs()" style="background: #f44336; margin-bottom: 15px;">Clear Logs</button>
+                <div class="log-container" id="logs"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_URL = 'http://localhost:5000';
+        const SOCKET_URL = 'http://localhost:5000/ws';
+        
+        let token = '';
+        let socket = null;
+        let currentUser = null;
+        let currentRoom = null;
+
+        // Logging function
+        function log(message, type = 'info') {
+            const logsContainer = document.getElementById('logs');
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            logsContainer.appendChild(logEntry);
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+            log('Logs cleared', 'info');
+        }
+
+        // Login function
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            if (!email || !password) {
+                showStatus('loginStatus', 'Please enter email and password', 'error');
+                return;
+            }
+
+            try {
+                log('Attempting to login...', 'info');
+                const response = await fetch(`${API_URL}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 1 && data.data && data.data.token) {
+                    token = data.data.token;
+                    currentUser = data.data.user || data.data;
+                    
+                    log('✅ Login successful!', 'success');
+                    showStatus('loginStatus', 'Login successful!', 'success');
+                    
+                    // Show user info
+                    document.getElementById('userSection').classList.remove('hidden');
+                    document.getElementById('userInfo').innerHTML = `
+                        <h3>User Information</h3>
+                        <p><strong>ID:</strong> ${currentUser.id || currentUser.user_id || 'N/A'}</p>
+                        <p><strong>Email:</strong> ${currentUser.email || email}</p>
+                        <p><strong>Role:</strong> ${currentUser.role || 'player'}</p>
+                        <p><strong>Token:</strong> ${token.substring(0, 20)}...</p>
+                    `;
+
+                    // Show socket section
+                    document.getElementById('socketSection').classList.remove('hidden');
+                    
+                    // Auto-connect socket
+                    setTimeout(() => {
+                        connectSocket();
+                    }, 500);
+                } else {
+                    log('❌ Login failed: ' + (data.message || 'Invalid credentials'), 'error');
+                    showStatus('loginStatus', data.message || 'Login failed', 'error');
+                }
+            } catch (error) {
+                log('❌ Login error: ' + error.message, 'error');
+                showStatus('loginStatus', 'Login error: ' + error.message, 'error');
+            }
+        }
+
+        // Connect Socket
+        function connectSocket() {
+            if (!token) {
+                log('❌ Please login first', 'error');
+                showStatus('socketStatus', 'Please login first', 'error');
+                return;
+            }
+
+            if (socket && socket.connected) {
+                log('⚠️ Socket already connected', 'warning');
+                return;
+            }
+
+            log('🔌 Connecting to socket...', 'info');
+            
+            socket = io(SOCKET_URL, {
+                auth: {
+                    token: token
+                },
+                transports: ['websocket', 'polling'],
+                path: '/ws/socket.io'
+            });
+
+            // Connection events
+            socket.on('connect', () => {
+                log('✅ Socket connected! Socket ID: ' + socket.id, 'success');
+                showStatus('socketStatus', 'Socket connected!', 'success');
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('roomSection').classList.remove('hidden');
+            });
+
+            socket.on('connect_error', (error) => {
+                log('❌ Socket connection error: ' + error.message, 'error');
+                showStatus('socketStatus', 'Connection error: ' + error.message, 'error');
+            });
+
+            socket.on('disconnect', (reason) => {
+                log('👋 Socket disconnected: ' + reason, 'warning');
+                showStatus('socketStatus', 'Disconnected: ' + reason, 'error');
+                document.getElementById('connectBtn').disabled = false;
+            });
+
+            // Room events
+            socket.on('player:joined', (data) => {
+                log('👤 Player joined: ' + JSON.stringify(data, null, 2), 'success');
+                if (data.players) {
+                    updateRoomInfo(data);
+                }
+            });
+
+            socket.on('question:answered', (data) => {
+                log('✅ Answer submitted: ' + JSON.stringify(data, null, 2), 'info');
+            });
+
+            socket.on('player:disconnected', (data) => {
+                log('👋 Player disconnected: ' + JSON.stringify(data, null, 2), 'warning');
+            });
+
+            socket.on('game:started', (data) => {
+                log('🎮 Game started: ' + JSON.stringify(data, null, 2), 'success');
+            });
+
+            socket.on('question:new', (data) => {
+                log('❓ New question: ' + JSON.stringify(data, null, 2), 'info');
+            });
+
+            socket.on('game:ended', (data) => {
+                log('🏁 Game ended: ' + JSON.stringify(data, null, 2), 'success');
+            });
+
+            socket.on('player:left', (data) => {
+                log('👋 Player left: ' + JSON.stringify(data, null, 2), 'warning');
+            });
+
+            socket.on('player:ready', (data) => {
+                log('✅ Player ready: ' + JSON.stringify(data, null, 2), 'info');
+            });
+
+            // Error events
+            socket.on('error:general', (data) => {
+                log('❌ General error: ' + JSON.stringify(data, null, 2), 'error');
+            });
+
+            socket.on('error:game', (data) => {
+                log('🎮 Game error: ' + JSON.stringify(data, null, 2), 'error');
+            });
+        }
+
+        // Create Room
+        function createRoom() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected. Please connect socket first.', 'error');
+                showStatus('createRoomStatus', 'Socket not connected', 'error');
+                return;
+            }
+
+            const roomCode = document.getElementById('roomCode').value || 'ROOM' + Date.now();
+            const playerName = document.getElementById('playerName').value || currentUser?.email?.split('@')[0] || 'Player1';
+
+            if (!playerName) {
+                showStatus('createRoomStatus', 'Please enter player name', 'error');
+                return;
+            }
+
+            log('🎮 Creating room: ' + roomCode + ' as ' + playerName, 'info');
+
+            socket.emit('room:join', {
+                roomCode: roomCode,
+                playerName: playerName,
+                isHost: true
+            }, (response) => {
+                if (response && response.success) {
+                    log('✅ Room created successfully!', 'success');
+                    showStatus('createRoomStatus', 'Room created successfully!', 'success');
+                    currentRoom = response.room;
+                    updateRoomInfo(response);
+                } else {
+                    log('❌ Failed to create room: ' + (response?.error || 'Unknown error'), 'error');
+                    showStatus('createRoomStatus', response?.error || 'Failed to create room', 'error');
+                }
+            });
+        }
+
+        // Join Room
+        function joinRoom() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected. Please connect socket first.', 'error');
+                showStatus('joinRoomStatus', 'Socket not connected', 'error');
+                return;
+            }
+
+            const roomCode = document.getElementById('joinRoomCode').value;
+            const playerName = document.getElementById('joinPlayerName').value || currentUser?.email?.split('@')[0] || 'Player2';
+
+            if (!roomCode) {
+                showStatus('joinRoomStatus', 'Please enter room code', 'error');
+                return;
+            }
+
+            if (!playerName) {
+                showStatus('joinRoomStatus', 'Please enter player name', 'error');
+                return;
+            }
+
+            log('🚪 Joining room: ' + roomCode + ' as ' + playerName, 'info');
+
+            socket.emit('room:join', {
+                roomCode: roomCode,
+                playerName: playerName,
+                isHost: false
+            }, (response) => {
+                if (response && response.success) {
+                    log('✅ Joined room successfully!', 'success');
+                    showStatus('joinRoomStatus', 'Joined room successfully!', 'success');
+                    currentRoom = response.room;
+                    updateRoomInfo(response);
+                } else {
+                    log('❌ Failed to join room: ' + (response?.error || 'Unknown error'), 'error');
+                    showStatus('joinRoomStatus', response?.error || 'Failed to join room', 'error');
+                }
+            });
+        }
+
+        // Update Room Info
+        function updateRoomInfo(data) {
+            const roomInfoDiv = document.getElementById('roomInfo');
+            roomInfoDiv.classList.remove('hidden');
+
+            const room = data.room || data;
+            const players = room.players || data.players || [];
+
+            let html = `
+                <h3>Room Information</h3>
+                <p><strong>Room Code:</strong> ${room.roomCode || room.code || 'N/A'}</p>
+                <p><strong>Status:</strong> ${room.status || 'waiting'}</p>
+                <p><strong>Total Players:</strong> ${players.length}</p>
+                <div class="players-list">
+                    <strong>Players:</strong>
+            `;
+
+            players.forEach((player, index) => {
+                html += `
+                    <div class="player-item">
+                        <span>${index + 1}. ${player.username || player.name || 'Player'}</span>
+                        <span class="badge ${player.isHost ? 'host' : 'player'}">
+                            ${player.isHost ? '👑 Host' : '👤 Player'}
+                        </span>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            roomInfoDiv.innerHTML = html;
+        }
+
+        // Show Status
+        function showStatus(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.className = `status ${type}`;
+            element.textContent = message;
+            setTimeout(() => {
+                if (type === 'success' || type === 'info') {
+                    element.textContent = '';
+                    element.className = 'status';
+                }
+            }, 5000);
+        }
+
+        // Auto-generate room code
+        document.getElementById('roomCode').addEventListener('focus', function() {
+            if (!this.value) {
+                this.value = 'ROOM' + Date.now();
+            }
+        });
+
+        // Initialize
+        log('🚀 Game Test Page Loaded', 'success');
+        log('📋 Instructions: Login → Connect Socket → Create/Join Room', 'info');
+    </script>
+</body>
+</html>
+
