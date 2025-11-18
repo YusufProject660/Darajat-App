@@ -108,7 +108,16 @@ async function authenticateSocket(socket: Socket, next: (err?: Error) => void) {
 async function handleJoinRoom(
   _io: SocketIOServer,
   socket: Socket<ClientEvents, ServerEvents, InterServerEvents, SocketData>,
-  data: { roomCode: string; playerName: string; isHost?: boolean },
+  data: { 
+    roomCode: string; 
+    playerName: string; 
+    isHost?: boolean;
+    settings?: {
+      numberOfQuestions?: number;
+      maximumPlayers?: number;
+      categories?: { [key: string]: { enabled: boolean; difficulty: 'easy' | 'medium' | 'hard' } };
+    };
+  },
   callback?: (response: { success: boolean; room?: any; player?: any; error?: string }) => void
 ) {
   const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
@@ -169,10 +178,11 @@ async function handleJoinRoom(
         console.log('Host Name:', username);
         console.log('Room Code:', roomCode);
         console.log('Host ID:', userId);
+        console.log('Settings:', data.settings || 'Using defaults');
         
-        logger.info('🎮 Creating new room', { requestId, roomCode, playerName, userId });
-        // Fix: createRoom expects (hostName, roomCode, hostId)
-        room = await gameService.createRoom(username, roomCode, userId);
+        logger.info('🎮 Creating new room', { requestId, roomCode, playerName, userId, settings: data.settings });
+        // createRoom expects (hostName, roomCode, hostId, settings?)
+        room = await gameService.createRoom(username, roomCode, userId, data.settings);
         player = room.players?.[0];
         
         console.log('✅ Room Created Successfully');
@@ -269,7 +279,7 @@ async function handleJoinRoom(
           username: username,
           avatar: socketData.user.avatar,
           score: 0,
-          isHost: isHost || false
+          isHost: room.hostId?.toString() === userId || isHost || false
         },
         players: (room.players || []).map((p: any) => ({
           id: p.userId?.toString() || p.userId || p.id,
@@ -392,14 +402,7 @@ async function handleDisconnect(
   // Handle player disconnection from game
   if (roomCode && playerId) {
     try {
-      // Notify other players in the room
-      io.to(roomCode).emit('player:disconnected', {
-        playerId,
-        timestamp: new Date().toISOString(),
-        reason: 'connection_lost'
-      });
-
-      // Update game state through game service
+      // Update game state through game service (it will emit the disconnect event)
       await gameService.handlePlayerDisconnect(socket, playerId, roomCode);
 
       // Clean up the room if empty
@@ -438,7 +441,7 @@ export function setupSocketHandlers(io: SocketIOServer<ClientEvents, ServerEvent
     console.log('Socket ID:', socket.id);
     console.log('Connection Time:', connectionTime.toISOString());
     console.log('Total Active Connections:', io.engine.clientsCount);
-    
+
     // Initialize socket data with default values if not set by auth
     if (!socket.data) {
       socket.data = {

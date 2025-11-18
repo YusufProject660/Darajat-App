@@ -2,7 +2,7 @@ import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { body, validationResult, ValidationChain } from 'express-validator';
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
-const CATEGORIES = ['sawm', 'salah', 'prophets', 'fiqh'] as const;
+const CATEGORIES = ['quran', 'hadith', 'history', 'fiqh', 'seerah'] as const;
 
 type Difficulty = typeof DIFFICULTIES[number];
 type Category = typeof CATEGORIES[number];
@@ -57,31 +57,31 @@ const createGameValidations: ValidationChain[] = [
       }
       
       // Store the sanitized categories in the request for later use
-      const sanitizedCategories: Record<string, CategoryConfig> = {};
+      // Include ALL categories (both enabled and disabled) so controller can process them
+      const sanitizedCategories: Record<string, { enabled: boolean; difficulty: string }> = {};
       
       for (const [category, config] of Object.entries(categories as Record<string, RawCategoryConfig>)) {
         if (config && typeof config === 'object') {
           const enabled = !!config.enabled || config.Enabled === true || config.Enabled === 'true';
-          const difficulty = (config.difficulty || config.Difficulty || '').toString().toLowerCase();
+          const difficulty = (config.difficulty || config.Difficulty || 'easy').toString().toLowerCase();
           
           const categoryLower = category.toLowerCase();
           if (CATEGORIES.includes(categoryLower as Category)) {
-            if (enabled) {
-              if (!DIFFICULTIES.includes(difficulty as Difficulty)) {
-                throw new Error(`Invalid difficulty '${difficulty}' for category '${category}'. Must be one of: ${DIFFICULTIES.join(', ')}`);
-              }
-            
-              sanitizedCategories[categoryLower] = {
-                enabled,
-                difficulty: difficulty as Difficulty,
-                name: categoryLower
-              };
+            // Validate difficulty only if category is enabled
+            if (enabled && !DIFFICULTIES.includes(difficulty as Difficulty)) {
+              throw new Error(`Invalid difficulty '${difficulty}' for category '${category}'. Must be one of: ${DIFFICULTIES.join(', ')}`);
             }
+            
+            // Add all categories (enabled and disabled) to sanitizedCategories
+            sanitizedCategories[categoryLower] = {
+              enabled,
+              difficulty: (enabled ? difficulty : 'easy') as Difficulty
+            };
           }
         }
       }
       
-      // Update the request body with the sanitized categories
+      // Update the request body with the sanitized categories (all categories, not just enabled)
       req.body.categories = sanitizedCategories;
       
       return true;

@@ -3,12 +3,22 @@ import { Server } from 'socket.io';
 import { Socket } from 'socket.io';
 import { Model, Types } from 'mongoose';
 import { GameRoom, IGameRoom, IPlayer, IAnsweredQuestion } from '../models/gameRoom.model';
+import { Question } from '../models/question.model';
 import { logger } from '../../../utils/logger';
 
 // Extend the IGameService interface to include our methods
 interface IGameService {
   initialize(io: Server): void;
-  createRoom(hostName: string, roomCode: string, hostId: string): Promise<IGameRoom>;
+  createRoom(
+    hostName: string, 
+    roomCode: string, 
+    hostId: string,
+    settings?: {
+      numberOfQuestions?: number;
+      maximumPlayers?: number;
+      categories?: { [key: string]: { enabled: boolean; difficulty: 'easy' | 'medium' | 'hard' } };
+    }
+  ): Promise<IGameRoom>;
   startGame(roomCode: string, userId: string): Promise<IGameRoom>;
   joinRoom(roomCode: string, playerData: Partial<IPlayer>): Promise<IGameRoom>;
   toggleReady(roomCode: string, userId: string): Promise<IGameRoom>;
@@ -261,14 +271,6 @@ class GameService implements IGameService {
       // Update room status
       room.status = 'active';
       room.currentQuestion = 0;
-      
-      // If no questions are loaded, generate some
-      if (!room.questions || room.questions.length === 0) {
-        // This is a simplified example - in a real app, you'd fetch questions
-        // based on the room's settings
-        room.questions = [];
-        // Add your question generation logic here
-      }
 
       await room.save({ session });
       (room as any).startedAt = new Date();
@@ -336,7 +338,7 @@ class GameService implements IGameService {
           username: playerData.username || 'Player',
           avatar: playerData.avatar,
           score: 0,
-          isHost: room.players.length === 0, // First player is host
+          isHost: room.hostId.toString() === userId.toString(),
           isReady: false
         };
         room.players.push(newPlayer);
@@ -382,16 +384,6 @@ class GameService implements IGameService {
       })));
       console.log('Room Status:', updatedRoom.status);
       console.log('═══════════════════════════════════════════════════════════');
-
-      // Broadcast update to all clients in the room
-      if (this.io) {
-        console.log('📢 Emitting player:joined event from game.service');
-        this.io.to(roomCode).emit('player:joined', {
-          success: true,
-          data: formattedRoom
-        });
-        console.log('✅ Event emitted to room:', roomCode);
-      }
 
       return formattedRoom as any;
     } catch (error) {
@@ -485,9 +477,12 @@ class GameService implements IGameService {
         throw new Error('You have already answered this question');
       }
 
-      // In a real app, you would validate the answer against the question
-      // For now, we'll just assume the answer is correct and award points
-      const isCorrect = true; // Replace with actual answer validation
+      // Validate answer against question
+      const question = await Question.findById(questionId).session(session);
+      if (!question) {
+        throw new Error('Question not found');
+      }
+      const isCorrect = question.correctAnswer === answer;
       const pointsEarned = isCorrect ? 10 : 0;
       
       // Update player score
@@ -709,7 +704,16 @@ class GameService implements IGameService {
     } as IGameRoom;
   }
 
-  public async createRoom(hostName: string, roomCode: string, hostId: string): Promise<IGameRoom> {
+  public async createRoom(
+    hostName: string, 
+    roomCode: string, 
+    hostId: string,
+    settings?: {
+      numberOfQuestions?: number;
+      maximumPlayers?: number;
+      categories?: { [key: string]: { enabled: boolean; difficulty: 'easy' | 'medium' | 'hard' } };
+    }
+  ): Promise<IGameRoom> {
     const session = await this.gameRoomModel.startSession();
     session.startTransaction();
     
@@ -720,10 +724,43 @@ class GameService implements IGameService {
         throw new Error('Room already exists');
       }
 
+      // Default settings if not provided
+      const defaultCategories = {
+        quran: { enabled: true, difficulty: 'medium' as const },
+        hadith: { enabled: false, difficulty: 'medium' as const },
+        history: { enabled: false, difficulty: 'medium' as const },
+        fiqh: { enabled: false, difficulty: 'medium' as const },
+        seerah: { enabled: false, difficulty: 'medium' as const }
+      };
+
+      const finalSettings = {
+        numberOfQuestions: settings?.numberOfQuestions || 10,
+        maximumPlayers: settings?.maximumPlayers || 4,
+        categories: settings?.categories || defaultCategories
+      };
+
+      // Ensure at least one category is enabled
+      const enabledCategories = Object.entries(finalSettings.categories).filter(([_, config]) => config.enabled);
+      if (enabledCategories.length === 0) {
+        // Enable quran by default if none enabled
+        finalSettings.categories.quran = { enabled: true, difficulty: 'medium' };
+      }
+
+      // Convert categories object to Map for Mongoose
+      const categoriesMap = new Map();
+      for (const [category, config] of Object.entries(finalSettings.categories)) {
+        categoriesMap.set(category, config);
+      }
+
       // Create new game room
       const newRoom = new this.gameRoomModel({
         roomCode,
         hostId,
+        settings: {
+          numberOfQuestions: finalSettings.numberOfQuestions,
+          maximumPlayers: finalSettings.maximumPlayers,
+          categories: categoriesMap
+        },
         players: [{
           userId: hostId,
           username: hostName,
@@ -732,11 +769,11 @@ class GameService implements IGameService {
           score: 0,
           answeredQuestions: []
         }],
-        gameState: 'waiting',
-        currentQuestion: null,
+        status: 'waiting',
+        currentQuestion: 0,
         questions: [],
-        startTime: null,
-        endTime: null,
+        answeredQuestions: [],
+        results: [],
         createdAt: new Date(),
         updatedAt: new Date()
       });

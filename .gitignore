@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Dependencies
 node_modules/
 dist/
@@ -9,8 +8,10 @@ dist/
 !.env.example
 
 # Logs
-logs
+logs/
 *.log
+*.out
+*.err
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -23,6 +24,10 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw?
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
 
 # OS generated files
 .DS_Store
@@ -36,13 +41,10 @@ Thumbs.db
 # Build files
 build/
 dist-*/
+coverage/
+.nyc_output
 tsconfig.tsbuildinfo
 *.tsbuildinfo
-
-# Debug logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # Optional npm cache directory
 .npm
@@ -55,14 +57,13 @@ yarn-error.log*
 
 # Output of 'npm pack'
 *.tgz
+*.gz
+*.zip
+*.bak
+*.tmp
 
 # Yarn Integrity file
 .yarn-integrity
-
-# dotenv environment variables file
-.env
-.env.test
-.env.production
 
 # parcel-bundler cache
 .cache
@@ -72,74 +73,28 @@ yarn-error.log*
 .next
 out
 
-# Production
-build
-
-# Debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
 # Local development
-.DS_Store
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 
-# Testing
-coverage
-.nyc_output
-
-# TypeScript
-*.tsbuildinfo
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Misc
-.DS_Store
-Thumbs.db
-=======
-# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Logs
-logs/
-*.log
-*.out
-*.err
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# IDEs
-.vscode/
-.idea/
-*.sublime-workspace
-*.sublime-project
-
-# Build output
-
-build/
-coverage/
-
-# Misc
-*.tgz
-*.gz
-*.zip
-*.bak
-*.tmp
->>>>>>> b5e213b58d8bc83ffddca1c25cd036ea337e3754
+# Documentation and Analysis Files (Summary .md files)
+EVENTS_COMPLETE_LIST.md
+FRONTEND_EVENTS_DOCUMENTATION.md
+SOCKET_CONNECTION_FIX_PLAN.md
+COMPLETE_EVENTS_LIST.md
+QUICK_SOCKET_TEST.md
+SOCKET_TESTING_GUIDE.md
+SOCKET_COMPLETE_ANALYSIS.md
+ROUTE_FLOW_BREAKS_ANALYSIS.md
+MISSING_FUNCTIONS_ANALYSIS.md
+APP_FLOW_DEEP_ANALYSIS.md
+USER_MODULE_DEEP_ANALYSIS.md
+GAME_MODULE_DEEP_ANALYSIS.md
+CODEBASE_ANALYSIS_REPORT.md
+public/SOCKET-FLOW-EXPLANATION.md
+public/HOW-TO-TEST.md
+public/TESTING-GUIDE.md
+public/README-TEST-PAGE.md
+docs/ERROR_HANDLING.md

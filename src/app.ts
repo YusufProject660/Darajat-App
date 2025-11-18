@@ -19,6 +19,7 @@ import profileRoutes from './modules/users/routes/profile.routes';
 import gameRoutes from './modules/games/game.routes';
 import dashboardRoutes from './modules/dashboard/dashboard.routes';
 import { setupSocketHandlers } from './modules/games/socket.handler';
+import { gameService } from './modules/games/services/game.service';
 import { errorMiddleware, notFoundHandler } from './middlewares/error.middleware';
 import { AppError } from './utils/appError';
 import { responseFormatter } from './middlewares/responseFormatter';
@@ -208,7 +209,8 @@ export class App {
     }
     
     // Serve static files from the public directory
-    const publicDir = path.join(__dirname, '../../public');
+    // Use process.cwd() for reliable path resolution (project root)
+    const publicDir = path.join(process.cwd(), 'public');
     this.app.use(express.static(publicDir));
     
     // Add morgan logging
@@ -361,6 +363,24 @@ export class App {
       });
     });
 
+    // Serve static files from public directory
+    const publicDir = path.join(process.cwd(), 'public');
+    this.app.use(express.static(publicDir));
+    
+    // Serve game-test.html explicitly (for backward compatibility)
+    this.app.get('/game-test.html', (_req, res) => {
+      const filePath = path.join(publicDir, 'game-test.html');
+      res.sendFile(filePath, (err) => {
+        if (err) {
+          logger.error(`Error serving game-test.html: ${err.message}`);
+          res.status(404).json({
+            status: 0,
+            message: `File not found: ${filePath}`
+          });
+        }
+      });
+    });
+
     // API routes
     if (authRoutes) this.app.use('/api/auth', authRoutes);
     if (profileRoutes) this.app.use('/api/user', profileRoutes);
@@ -426,6 +446,9 @@ export class App {
 
       // Setup socket handlers (functional approach)
       setupSocketHandlers(this.io);
+      
+      // Initialize game service with socket instance
+      gameService.initialize(this.io);
       
       // Store socket instance in Express app for controller access
       this.app.set('io', this.io);

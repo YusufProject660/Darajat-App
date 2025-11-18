@@ -43,5 +43,17 @@ export const errorMiddleware = (err: any, _req: Request, res: Response, _next: N
 };
 
 export const notFoundHandler = (req: Request, _res: Response, next: NextFunction) => {
-  next(AppError.notFound(`Can't find ${req.originalUrl} on this server!`));
+  // Skip 404 for static files - let express.static handle them
+  if (req.path.endsWith('.html') || req.path.endsWith('.css') || req.path.endsWith('.js') || 
+      req.path.endsWith('.png') || req.path.endsWith('.jpg') || req.path.endsWith('.ico') ||
+      req.path === '/game-test.html') {
+    return next();
+  }
+  // Only return 404 for API routes
+  if (req.path.startsWith('/api/')) {
+    next(AppError.notFound(`Can't find ${req.originalUrl} on this server!`));
+  } else {
+    // For other routes, just pass through (let static files be handled)
+    next();
+  }
 };

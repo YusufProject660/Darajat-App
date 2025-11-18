@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Darajat Game - Complete Test</title>
+    <title>Player 2 - Game Test</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
             min-height: 100vh;
             padding: 20px;
         }
@@ -22,7 +22,7 @@
             overflow: hidden;
         }
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
             color: white;
             padding: 30px;
             text-align: center;
@@ -33,9 +33,9 @@
             background: #f8f9fa;
             padding: 25px;
             border-radius: 15px;
-            border-left: 5px solid #667eea;
+            border-left: 5px solid #2196f3;
         }
-        .section h2 { color: #667eea; margin-bottom: 20px; font-size: 1.5em; }
+        .section h2 { color: #2196f3; margin-bottom: 20px; font-size: 1.5em; }
         .form-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 8px; color: #333; font-weight: 600; }
         input, select {
@@ -47,11 +47,11 @@
         }
         input:focus, select:focus {
             outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            border-color: #2196f3;
+            box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
         }
         button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
             color: white;
             border: none;
             padding: 12px 30px;
@@ -63,7 +63,7 @@
             width: 100%;
             margin-top: 10px;
         }
-        button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); }
+        button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(33, 150, 243, 0.4); }
         button:disabled { opacity: 0.6; cursor: not-allowed; }
         .status {
             padding: 15px;
@@ -109,12 +109,12 @@
             text-align: left;
             transition: all 0.3s;
         }
-        .option-btn:hover { border-color: #667eea; background: #f1f8f4; }
+        .option-btn:hover { border-color: #2196f3; background: #e3f2fd; }
         .option-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .timer {
             font-size: 2em;
             font-weight: bold;
-            color: #667eea;
+            color: #2196f3;
             text-align: center;
             padding: 20px;
         }
@@ -141,62 +141,21 @@
         .badge.host { background: #4caf50; color: white; }
         .badge.ready { background: #2196f3; color: white; }
         .full-width { grid-column: 1 / -1; }
-        .instructions {
-            background: #fff9c4;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            border-left: 5px solid #fbc02d;
-        }
-        .instructions h3 { color: #f57f17; margin-bottom: 15px; }
-        .instructions ol { margin-left: 20px; }
-        .instructions li { margin: 10px 0; color: #555; }
-        .code-block {
-            background: #2d2d2d;
-            color: #f8f8f2;
-            padding: 10px;
-            border-radius: 5px;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            margin: 10px 0;
-            overflow-x: auto;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎮 Darajat Game - Complete Test</h1>
-            <p>Test Complete Game Flow: Login → Create/Join → Lobby → Start → Answer → Summary</p>
+            <h1>👤 Player 2</h1>
+            <p>Join Room, Answer Questions, View Results</p>
         </div>
         <div class="content">
-            <!-- Instructions -->
-            <div class="instructions full-width">
-                <h3>📋 Complete Testing Guide (Login se Finish Game tak):</h3>
-                <ol>
-                    <li><strong>Step 1 - Login:</strong> Enter email & password, click "Login"</li>
-                    <li><strong>Step 2 - Socket Connect:</strong> Auto-connects after login</li>
-                    <li><strong>Step 3 - Create Room (Host):</strong> Set questions, players, categories → Click "Create Room"</li>
-                    <li><strong>Step 4 - Join Room (Players):</strong> Enter room code → Click "Join Room"</li>
-                    <li><strong>Step 5 - Lobby:</strong> See all players, click "Mark Ready" (all players must be ready)</li>
-                    <li><strong>Step 6 - Start Game (Host Only):</strong> Click "Start Game" button</li>
-                    <li><strong>Step 7 - Answer Questions:</strong> Select option or wait for timer (auto-skip)</li>
-                    <li><strong>Step 8 - Game Summary:</strong> View correct/wrong/skipped answers, accuracy, rank</li>
-                    <li><strong>Step 9 - Leaderboard:</strong> Click "View Leaderboard" to see all players' scores</li>
-                </ol>
-                <div class="code-block">
-                    <strong>Server:</strong> http://localhost:5000<br>
-                    <strong>Socket Path:</strong> /ws/socket.io<br>
-                    <strong>Test Pages:</strong> player1.html (Host), player2.html, player3.html (Players)
-                </div>
-            </div>
-
             <!-- Login Section -->
             <div class="section">
                 <h2>🔐 Step 1: Login</h2>
                 <div class="form-group">
                     <label>Email:</label>
-                    <input type="email" id="email" value="test@example.com" placeholder="Enter email">
+                    <input type="email" id="email" value="player2@test.com" placeholder="Enter email">
                 </div>
                 <div class="form-group">
                     <label>Password:</label>
@@ -213,91 +172,12 @@
                 <button onclick="connectSocket()" id="connectBtn" disabled>Connect Socket</button>
             </div>
 
-            <!-- Create Room Section -->
-            <div class="section hidden" id="roomSection">
-                <h2>🏠 Create Room (Host)</h2>
-                <div class="form-group">
-                    <label>Room Code:</label>
-                    <input type="text" id="roomCode" placeholder="Auto-generated" readonly>
-                </div>
-                <div class="form-group">
-                    <label>Number of Questions:</label>
-                    <input type="number" id="numberOfQuestions" value="5" min="1" max="10">
-                </div>
-                <div class="form-group">
-                    <label>Max Players:</label>
-                    <input type="number" id="maximumPlayers" value="7" min="2" max="10">
-                </div>
-                <div class="form-group">
-                    <label>Categories:</label>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
-                        <div>
-                            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                                <input type="checkbox" id="catQuran" checked>
-                                <span>Quran</span>
-                            </label>
-                            <select id="diffQuran" style="width: 100%; padding: 8px; border-radius: 5px;">
-                                <option value="easy">Easy</option>
-                                <option value="medium" selected>Medium</option>
-                                <option value="hard">Hard</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                                <input type="checkbox" id="catHadith">
-                                <span>Hadith</span>
-                            </label>
-                            <select id="diffHadith" style="width: 100%; padding: 8px; border-radius: 5px;">
-                                <option value="easy">Easy</option>
-                                <option value="medium" selected>Medium</option>
-                                <option value="hard">Hard</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                                <input type="checkbox" id="catHistory">
-                                <span>History</span>
-                            </label>
-                            <select id="diffHistory" style="width: 100%; padding: 8px; border-radius: 5px;">
-                                <option value="easy">Easy</option>
-                                <option value="medium" selected>Medium</option>
-                                <option value="hard">Hard</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                                <input type="checkbox" id="catFiqh">
-                                <span>Fiqh</span>
-                            </label>
-                            <select id="diffFiqh" style="width: 100%; padding: 8px; border-radius: 5px;">
-                                <option value="easy">Easy</option>
-                                <option value="medium" selected>Medium</option>
-                                <option value="hard">Hard</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                                <input type="checkbox" id="catSeerah">
-                                <span>Seerah</span>
-                            </label>
-                            <select id="diffSeerah" style="width: 100%; padding: 8px; border-radius: 5px;">
-                                <option value="easy">Easy</option>
-                                <option value="medium" selected>Medium</option>
-                                <option value="hard">Hard</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-                <button onclick="createRoom()">Create Room</button>
-                <div id="createRoomStatus"></div>
-            </div>
-
             <!-- Join Room Section -->
-            <div class="section hidden" id="joinSection">
+            <div class="section hidden" id="roomSection">
                 <h2>🚪 Join Room</h2>
                 <div class="form-group">
                     <label>Room Code:</label>
-                    <input type="text" id="joinRoomCode" placeholder="Enter room code">
+                    <input type="text" id="roomCode" placeholder="Enter room code">
                 </div>
                 <button onclick="joinRoom()">Join Room</button>
                 <div id="joinRoomStatus"></div>
@@ -309,7 +189,6 @@
                 <div id="roomInfo"></div>
                 <div id="playersList" class="players-list"></div>
                 <button onclick="toggleReady()" id="readyBtn">Mark Ready</button>
-                <button onclick="startGame()" id="startBtn" style="background: #f44336; margin-top: 10px;" disabled>Start Game (Host Only)</button>
                 <div id="lobbyStatus"></div>
             </div>
 
@@ -337,7 +216,6 @@
                     <button onclick="testGetQuestions()" style="background: #4caf50;">Get Questions</button>
                     <button onclick="testGetSummary()" style="background: #4caf50;">Get Summary</button>
                     <button onclick="testGetLeaderboard()" style="background: #4caf50;">Get Leaderboard</button>
-                    <button onclick="testGetMyGames()" style="background: #4caf50;">Get My Games</button>
                     <button onclick="testGetRoom()" style="background: #4caf50;">Get Room</button>
                 </div>
                 <div id="apiResponse" class="log-container" style="max-height: 200px; margin-top: 15px;"></div>
@@ -364,7 +242,6 @@
         let currentQuestionIndex = 0;
         let timerInterval = null;
         let timeLeft = 0;
-        let isHost = false;
 
         function log(message, type = 'info') {
             const logsContainer = document.getElementById('logs');
@@ -442,7 +319,6 @@
                 showStatus('socketStatus', 'Socket connected!', 'success');
                 document.getElementById('connectBtn').disabled = true;
                 document.getElementById('roomSection').classList.remove('hidden');
-                document.getElementById('joinSection').classList.remove('hidden');
             });
 
             socket.on('connect_error', (error) => {
@@ -495,96 +371,6 @@
             });
         }
 
-        // Create Room
-        async function createRoom() {
-            if (!socket || !socket.connected) {
-                log('❌ Socket not connected', 'error');
-                return;
-            }
-
-            const numberOfQuestions = parseInt(document.getElementById('numberOfQuestions').value) || 5;
-            const maximumPlayers = parseInt(document.getElementById('maximumPlayers').value) || 7;
-            const roomCode = 'ROOM' + Date.now();
-
-            document.getElementById('roomCode').value = roomCode;
-            isHost = true;
-
-            // Collect all categories
-            const categories = {
-                quran: {
-                    enabled: document.getElementById('catQuran')?.checked || false,
-                    difficulty: document.getElementById('diffQuran')?.value || 'medium'
-                },
-                hadith: {
-                    enabled: document.getElementById('catHadith')?.checked || false,
-                    difficulty: document.getElementById('diffHadith')?.value || 'medium'
-                },
-                history: {
-                    enabled: document.getElementById('catHistory')?.checked || false,
-                    difficulty: document.getElementById('diffHistory')?.value || 'medium'
-                },
-                fiqh: {
-                    enabled: document.getElementById('catFiqh')?.checked || false,
-                    difficulty: document.getElementById('diffFiqh')?.value || 'medium'
-                },
-                seerah: {
-                    enabled: document.getElementById('catSeerah')?.checked || false,
-                    difficulty: document.getElementById('diffSeerah')?.value || 'medium'
-                }
-            };
-
-            // Check if at least one category is enabled
-            const enabledCategories = Object.values(categories).filter(cat => cat.enabled);
-            if (enabledCategories.length === 0) {
-                log('❌ At least one category must be enabled. Enabling Quran by default.', 'warning');
-                categories.quran.enabled = true;
-            }
-
-            // Debug: Log categories being sent
-            log('📋 Categories: ' + JSON.stringify(categories), 'info');
-
-            try {
-                log('🎮 Creating room via API...', 'info');
-                const response = await fetch(`${API_URL}/api/game/create`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({
-                        categories,
-                        numberOfQuestions,
-                        maximumPlayers
-                    })
-                });
-
-                const data = await response.json();
-                if (data.status === 1) {
-                    currentRoom = data.data.roomCode;
-                    log('✅ Room created: ' + currentRoom, 'success');
-                    showStatus('createRoomStatus', 'Room created: ' + currentRoom, 'success');
-                    
-                    // Join via socket
-                    socket.emit('room:join', {
-                        roomCode: currentRoom,
-                        playerName: currentUser.email?.split('@')[0] || 'Host',
-                        isHost: true
-                    }, (response) => {
-                        if (response && response.success) {
-                            log('✅ Joined room via socket', 'success');
-                            document.getElementById('lobbySection').classList.remove('hidden');
-                            updateLobby();
-                        }
-                    });
-                } else {
-                    log('❌ Failed to create room: ' + data.message, 'error');
-                    showStatus('createRoomStatus', data.message, 'error');
-                }
-            } catch (error) {
-                log('❌ Create room error: ' + error.message, 'error');
-            }
-        }
-
         // Join Room
         async function joinRoom() {
             if (!socket || !socket.connected) {
@@ -592,13 +378,14 @@
                 return;
             }
 
-            const roomCode = document.getElementById('joinRoomCode').value.trim().toUpperCase();
+            const roomCode = document.getElementById('roomCode').value.trim().toUpperCase();
             if (!roomCode) {
                 showStatus('joinRoomStatus', 'Please enter room code', 'error');
                 return;
             }
 
             try {
+                // HTTP Join Room
                 log('🚪 Joining room via API...', 'info');
                 const response = await fetch(`${API_URL}/api/game/join`, {
                     method: 'POST',
@@ -608,7 +395,7 @@
                     },
                     body: JSON.stringify({
                         roomCode: roomCode,
-                        username: currentUser.email?.split('@')[0] || 'Player',
+                        username: currentUser.email?.split('@')[0] || 'Player2',
                         avatar: ''
                     })
                 });
@@ -616,14 +403,13 @@
                 const data = await response.json();
                 if (data.status === 1) {
                     currentRoom = roomCode;
-                    isHost = false;
                     log('✅ Joined room via API: ' + currentRoom, 'success');
                     showStatus('joinRoomStatus', 'Joined room: ' + currentRoom, 'success');
                     
                     // Join via socket
                     socket.emit('room:join', {
                         roomCode: currentRoom,
-                        playerName: currentUser.email?.split('@')[0] || 'Player',
+                        playerName: currentUser.email?.split('@')[0] || 'Player2',
                         isHost: false
                     }, (response) => {
                         if (response && response.success) {
@@ -671,11 +457,6 @@
                         `;
                     });
                     document.getElementById('playersList').innerHTML = playersHtml;
-
-                    // Enable start button if all ready and user is host
-                    const allReady = (lobby.players || []).every(p => p.isReady);
-                    const userIsHost = (lobby.players || []).some(p => p.isHost && p.userId?.toString() === currentUser.user_id?.toString());
-                    document.getElementById('startBtn').disabled = !allReady || lobby.status !== 'waiting' || !userIsHost;
                 }
             } catch (error) {
                 log('❌ Error updating lobby: ' + error.message, 'error');
@@ -698,27 +479,6 @@
                 }
             } catch (error) {
                 log('❌ Error toggling ready: ' + error.message, 'error');
-            }
-        }
-
-        // Start Game
-        async function startGame() {
-            if (!currentRoom) return;
-
-            try {
-                log('🎮 Starting game...', 'info');
-                const response = await fetch(`${API_URL}/api/game/${currentRoom}/start`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await response.json();
-                if (data.status === 1) {
-                    log('✅ Game started!', 'success');
-                } else {
-                    log('❌ Failed to start: ' + data.message, 'error');
-                }
-            } catch (error) {
-                log('❌ Error starting game: ' + error.message, 'error');
             }
         }
 
@@ -896,18 +656,6 @@
             }
         }
 
-        async function testGetMyGames() {
-            try {
-                const response = await fetch(`${API_URL}/api/game/my-games`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await response.json();
-                document.getElementById('apiResponse').textContent = JSON.stringify(data, null, 2);
-            } catch (error) {
-                document.getElementById('apiResponse').textContent = 'Error: ' + error.message;
-            }
-        }
-
         async function testGetRoom() {
             if (!currentRoom) { log('❌ No room code', 'error'); return; }
             try {
@@ -921,15 +669,8 @@
             }
         }
 
-        // Auto-generate room code
-        document.getElementById('roomCode').addEventListener('focus', function() {
-            if (!this.value) {
-                this.value = 'ROOM' + Date.now();
-            }
-        });
-
-        log('🚀 Game Test Page Loaded', 'success');
-        log('📋 Complete Flow: Login → Create/Join → Lobby → Start → Answer → Summary', 'info');
+        log('🚀 Player 2 Page Loaded', 'success');
     </script>
 </body>
 </html>
+
