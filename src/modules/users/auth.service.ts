@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { AppError } from '../../utils/appError';
 import User, { IUser } from './user.model';
+import FirebaseUser, { IFirebaseUser } from './firebase-user.model';
 import { AuthResponse } from './types/user.types';
 import { sendPasswordResetEmail } from '../../services/email.service';
 import { logger } from '../../utils/logger';
@@ -255,7 +256,7 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
   logger.info(`${logPrefix} [1/7] Starting password reset for email:`, email);
   
   // Timeout for the entire operation (25 seconds)
-  const operationTimeout = 25000;
+  const operationTimeout = 250000;
   let timeoutId: NodeJS.Timeout | null = null;
   
   const handleError = (error: any, defaultMessage: string) => {
@@ -339,8 +340,8 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
           { _id: (userDoc as any)._id },
           {
             $set: {
-              resetPasswordToken: token,
-              resetPasswordExpires: expiresAt,
+              resetToken: token,
+              resetTokenExpires: expiresAt,
               lastResetRequest: now
             }
           }
@@ -348,7 +349,7 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
 
         // 5. Send reset email (don't await this, respond immediately)
         logger.info(`${logPrefix} [7/7] Scheduling password reset email...`);
-        const resetUrl = `${config.backendUrl || 'http://localhost:5000'}/reset-password?token=${token}`;
+        const resetUrl = `${config.backendUrl || 'http://localhost:5000'}/api/auth/reset-password?token=${token}`;
         
         // Don't await the email sending, just start it and respond
         userDoc = Array.isArray(user) ? user[0] : user;
@@ -561,8 +562,8 @@ export const resetPassword = async (token: string, newPassword: string): Promise
   try {
     // 1. Find user by reset token and check if token is not expired
     const user = await User.findOne({
-      resetPasswordToken: token,
-      resetPasswordExpires: { $gt: new Date() }
+      resetToken: token,
+      resetTokenExpires: { $gt: new Date() }
     });
 
     if (!user) {
@@ -575,8 +576,8 @@ export const resetPassword = async (token: string, newPassword: string): Promise
     // 2. Update password
     // Just set the plain password - the pre-save hook will handle hashing it
     user.password = newPassword;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
+    user.resetToken = undefined;
+    user.resetTokenExpires = undefined;
     
     // This will trigger the pre-save hook to hash the password
     await user.save();
@@ -599,6 +600,101 @@ export const resetPassword = async (token: string, newPassword: string): Promise
     throw error;
   }
 }
+
+/**
+ * Save or update Firebase user data
+ * @param firebase_uid - Firebase user ID
+ * @param email - User email
+ * @param first_name - User first name
+ * @param last_name - User last name
+ * @returns Promise with saved/updated user data
+ */
+export const saveFirebaseUser = async (
+  firebase_uid: string,
+  email: string,
+  first_name: string,
+  last_name: string
+): Promise<IFirebaseUser> => {
+  try {
+    // Validate required fields
+    if (!firebase_uid || !email || !first_name || !last_name) {
+      throw new AppError('All fields (firebase_uid, email, first_name, last_name) are required', 400);
+    }
+
+    // Trim and normalize inputs
+    const trimmedFirebaseUid = firebase_uid.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedFirstName = first_name.trim();
+    const trimmedLastName = last_name.trim();
+
+    // Check if user with this firebase_uid already exists
+    let existingUser = await FirebaseUser.findOne({ firebase_uid: trimmedFirebaseUid });
+
+    if (existingUser) {
+      // Update existing user
+      existingUser.email = trimmedEmail;
+      existingUser.first_name = trimmedFirstName;
+      existingUser.last_name = trimmedLastName;
+      await existingUser.save();
+      logger.info(`Updated Firebase user with UID: ${trimmedFirebaseUid}`);
+      return existingUser;
+    }
+
+    // Check if user with same name already exists
+    const existingNameUser = await FirebaseUser.findOne({
+      first_name: trimmedFirstName,
+      last_name: trimmedLastName
+    });
+
+    if (existingNameUser) {
+      // User with same name exists - we'll still create/update based on firebase_uid
+      // But we can log a warning
+      logger.warn(`User with name ${trimmedFirstName} ${trimmedLastName} already exists with firebase_uid: ${existingNameUser.firebase_uid}`);
+      
+      // Create new user with this firebase_uid (since firebase_uid is unique)
+      const newUser = await FirebaseUser.create({
+        firebase_uid: trimmedFirebaseUid,
+        email: trimmedEmail,
+        first_name: trimmedFirstName,
+        last_name: trimmedLastName
+      });
+      logger.info(`Created new Firebase user with UID: ${trimmedFirebaseUid} (name conflict with existing user)`);
+      return newUser;
+    }
+
+    // No existing user found - create new one
+    const newUser = await FirebaseUser.create({
+      firebase_uid: trimmedFirebaseUid,
+      email: trimmedEmail,
+      first_name: trimmedFirstName,
+      last_name: trimmedLastName
+    });
+    
+    logger.info(`Created new Firebase user with UID: ${trimmedFirebaseUid}`);
+    return newUser;
+  } catch (error: any) {
+    logger.error('Error saving Firebase user:', error);
+    
+    // Handle duplicate key error (e.g., duplicate firebase_uid or email)
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern || {})[0];
+      throw new AppError(`A user with this ${field} already exists`, 409);
+    }
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors || {}).map((err: any) => err.message);
+      throw new AppError(messages[0] || 'Validation failed', 400);
+    }
+    
+    // Re-throw AppError
+    if (error instanceof AppError) {
+      throw error;
+    }
+    
+    throw new AppError('Failed to save Firebase user', 500);
+  }
+};
 
 export {
   generateToken,

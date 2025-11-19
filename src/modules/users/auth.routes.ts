@@ -13,12 +13,15 @@ import {
   changePassword,
   updateUserProfile,
   deleteUserAccount,
-  logoutUser
+  logoutUser,
+  saveFirebaseUserHandler
 } from './auth.controller';
 import { forgotPassword as forgotPasswordService } from './auth.service';
 import { protect } from '../../middlewares/auth.middleware';
 import { authorize } from '../../middlewares/role.middleware';
 import { logger } from '../../utils/logger';
+import { updateProfilePicture } from './controllers/profile.controller';
+import { upload } from '../../middlewares/upload';
 
 const router = Router();
 
@@ -31,6 +34,17 @@ router.all('/signup', (req, res, next) => {
     });
   }
   return registerUser(req, res, next);
+});
+
+// Firebase user route
+router.all('/firebase-google', (req, res, next) => {
+  if (req.method !== 'POST') {
+    return res.status(200).json({
+      status: 0,
+      message: 'Invalid request method. Use POST.'
+    });
+  }
+  return saveFirebaseUserHandler(req, res, next);
 });
 router.all('/login', (req, res, next) => {
   if (req.method !== 'POST') {
@@ -58,10 +72,10 @@ router.all('/logout', (req, res, next) => {
 router.post('/logout', logoutUser);
 
 // Password reset routes
-router.get('/api/auth/reset-password', resetPasswordPage as any);
+router.get('/reset-password', resetPasswordPage as any);
 
 // Handle the reset password form submission
-router.post('/api/auth/reset-password', resetPasswordHandler as any);
+router.post('/reset-password', resetPasswordHandler as any);
 
 // Helper function to create a timeout promise
 const createTimeout = <T>(ms: number, message: string): Promise<T> => {
@@ -197,6 +211,21 @@ router.all('/profile', (req, res, next) => {
   }
   next();
 });
+
+// Profile picture update route - Method validation before authentication
+router.all('/profile-picture', (req, res, next) => {
+  if (req.method !== 'PUT') {
+    res.set('Allow', 'PUT');
+    res.status(200).json({
+      status: 0,
+      message: 'Invalid request method. Please use PUT for this endpoint.'
+    });
+    return;
+  }
+  next();
+  return;
+});
+router.put('/profile-picture', protect, upload.single('profilePicture'), updateProfilePicture);
 
 router.delete('/delete', protect, deleteUserAccount);
 router.all('/delete', (req, res, next) => {

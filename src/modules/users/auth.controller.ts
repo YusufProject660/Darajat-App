@@ -1,11 +1,11 @@
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import path from 'path';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import { config } from '../../config/env';
 import { IUser } from './user.model';
-import { register, login, getMe, forgotPassword, resetPassword, changePassword as changePasswordService, updateProfile, deleteUser } from './auth.service';
+import { register, login, getMe, forgotPassword, resetPassword, changePassword as changePasswordService, updateProfile, deleteUser, saveFirebaseUser } from './auth.service';
 import { addToBlacklist } from '../../utils/tokenBlacklist';
 import { AppError } from '../../utils/appError';
 import { AuthRequest } from './types/user.types';
@@ -996,4 +996,122 @@ export const changePassword = asyncHandler(async (req: AuthRequest, res: Respons
     status: 1,
     message: result.message
   });
+});
+
+// @desc    Save or update Firebase user
+// @route   POST /api/auth/firebase-google
+// @access  Public
+export const saveFirebaseUserHandler = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const body = req.body as { 
+      firebase_uid?: string; 
+      email?: string; 
+      first_name?: string; 
+      last_name?: string;
+    };
+    
+    const { firebase_uid, email, first_name, last_name } = body;
+
+    // Validate required fields
+    if (!firebase_uid) {
+      return res.status(200).json({
+        status: 0,
+        message: 'firebase_uid is required'
+      });
+    }
+
+    if (!email) {
+      return res.status(200).json({
+        status: 0,
+        message: 'email is required'
+      });
+    }
+
+    if (!first_name) {
+      return res.status(200).json({
+        status: 0,
+        message: 'first_name is required'
+      });
+    }
+
+    if (!last_name) {
+      return res.status(200).json({
+        status: 0,
+        message: 'last_name is required'
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+    if (
+      !emailRegex.test(email) ||
+      email.includes('..') ||
+      /@\.|\.@|\.{2,}/.test(email) ||
+      /\s/.test(email) ||
+      /[\s<>\[\],;:\\"]/.test(email) ||
+      /@.*@/.test(email) ||
+      email.split('@')[0].length > 64 ||
+      email.split('@')[1].length > 255
+    ) {
+      return res.status(200).json({
+        status: 0,
+        message: 'Invalid email format.'
+      });
+    }
+
+    // Call service to save/update Firebase user
+    const firebaseUser = await saveFirebaseUser(firebase_uid, email, first_name, last_name);
+
+    return res.status(200).json({
+      status: 1,
+      message: 'Firebase user saved successfully',
+      data: {
+        id: firebaseUser._id.toString(),
+        firebase_uid: firebaseUser.firebase_uid,
+        email: firebaseUser.email,
+        first_name: firebaseUser.first_name,
+        last_name: firebaseUser.last_name,
+        createdAt: firebaseUser.createdAt,
+        updatedAt: firebaseUser.updatedAt
+      }
+    });
+  } catch (error: any) {
+    logger.error('Error in saveFirebaseUserHandler:', error);
+
+    // Handle AppError
+    if (error instanceof AppError) {
+      return res.status(200).json({
+        status: 0,
+        message: error.message
+      });
+    }
+
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const messages = [];
+      for (const field in error.errors) {
+        if (error.errors[field].message) {
+          messages.push(error.errors[field].message);
+        }
+      }
+      return res.status(200).json({
+        status: 0,
+        message: messages.length > 0 ? messages[0] : 'Validation failed. Please check your input.'
+      });
+    }
+
+    // Handle duplicate key error
+    if (error.code === 11000) {
+      return res.status(200).json({
+        status: 0,
+        message: 'A user with this information already exists.'
+      });
+    }
+
+    // Generic error
+    return res.status(200).json({
+      status: 0,
+      message: 'Failed to save Firebase user. Please try again later.'
+    });
+  }
 });
