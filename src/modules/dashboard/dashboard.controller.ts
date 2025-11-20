@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { Dashboard } from './dashboard.model';
 import { logger } from '../../utils/logger';
+import path from 'path';
+import fs from 'fs';
 
 interface IDashboardData {
   banner: {
@@ -47,10 +49,27 @@ export const getDashboardData = async (req: Request, res: Response): Promise<voi
       profile_picture: req.user.avatar || null
     } : null;
 
+    // Map game images: Use local image if exists, otherwise use database URL
+    const formattedGames = (dashboardData.funGames || []).map(game => {
+      // Check if local image exists in uploads/games-image folder
+      const localImagePath = path.join(process.cwd(), 'uploads', 'games-image', `${game.id}.png`);
+      const localImageExists = fs.existsSync(localImagePath);
+      
+      // If local image exists, use it; otherwise use the original database image URL
+      const imageUrl = localImageExists 
+        ? `/uploads/games-image/${game.id}.png`
+        : game.image; // Use original database image URL
+      
+      return {
+        ...game,
+        image: imageUrl
+      };
+    });
+
     // Prepare and send success response with funGames and user
     res.apiSuccess({
       user,
-      funGames: dashboardData.funGames || []
+      funGames: formattedGames
     }, 'Dashboard data fetched successfully');
   } catch (error) {
     logger.error('Error fetching dashboard data:', error);
