@@ -10,6 +10,7 @@ export interface IUser extends Document {
   password?: string; // Make password optional for OAuth users
   avatar?: string;
   googleId?: string;
+  firebase_uid?: string;
   stats: {
     gamesPlayed: number;
     accuracy: number;
@@ -123,6 +124,13 @@ const userSchema = new Schema<IUser>(
     googleId: {
       type: String,
       sparse: true,
+      index: true
+    },
+    firebase_uid: {
+      type: String,
+      sparse: true,
+      unique: true,
+      trim: true,
       index: true
     },
     stats: {

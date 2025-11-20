@@ -1,11 +1,9 @@
 import { Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
 import path from 'path';
 import fs from 'fs/promises';
 import fsSync from 'fs';
-import { config } from '../../config/env';
 import { IUser } from './user.model';
-import { register, login, getMe, forgotPassword, resetPassword, changePassword as changePasswordService, updateProfile, deleteUser, saveFirebaseUser } from './auth.service';
+import { register, login, getMe, forgotPassword, resetPassword, changePassword as changePasswordService, updateProfile, deleteUser, saveFirebaseUser, generateToken } from './auth.service';
 import { addToBlacklist } from '../../utils/tokenBlacklist';
 import { AppError } from '../../utils/appError';
 import { AuthRequest } from './types/user.types';
@@ -14,18 +12,6 @@ import { logger } from '../../utils/logger';
 
 // Import the password validation utility
 import { validatePassword } from '../../utils/passwordValidator';
-
-// Helper function to generate JWT token
-const generateToken = (user: IUser): string => {
-  return jwt.sign(
-    { 
-      id: user._id,
-      role: user.role 
-    },
-    config.jwtSecret, 
-    { expiresIn: '100y' }
-  );
-}
 
 // @desc    Register a new user
 // @route   POST /api/auth/signup
@@ -1060,19 +1046,26 @@ export const saveFirebaseUserHandler = asyncHandler(async (req: Request, res: Re
     }
 
     // Call service to save/update Firebase user
-    const firebaseUser = await saveFirebaseUser(firebase_uid, email, first_name, last_name);
+    const user = await saveFirebaseUser(firebase_uid, email, first_name, last_name);
+
+    // Generate token for the user
+    const token = generateToken(user);
+
+    // Set the token in the response header
+    res.setHeader('Authorization', `Bearer ${token}`);
 
     return res.status(200).json({
       status: 1,
       message: 'Firebase user saved successfully',
       data: {
-        id: firebaseUser._id.toString(),
-        firebase_uid: firebaseUser.firebase_uid,
-        email: firebaseUser.email,
-        first_name: firebaseUser.first_name,
-        last_name: firebaseUser.last_name,
-        createdAt: firebaseUser.createdAt,
-        updatedAt: firebaseUser.updatedAt
+        id: user._id.toString(),
+        firebase_uid: user.firebase_uid,
+        email: user.email,
+        first_name: user.firstName,
+        last_name: user.lastName,
+        token: token,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
       }
     });
   } catch (error: any) {

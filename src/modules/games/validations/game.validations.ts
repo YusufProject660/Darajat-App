@@ -7,12 +7,6 @@ const CATEGORIES = ['quran', 'hadith', 'history', 'fiqh', 'seerah'] as const;
 type Difficulty = typeof DIFFICULTIES[number];
 type Category = typeof CATEGORIES[number];
 
-interface CategoryConfig {
-  enabled: boolean;
-  difficulty: Difficulty;
-  name: string;
-}
-
 // Create validation chains
 const createGameValidations: ValidationChain[] = [
   // First, check if we have a valid request body

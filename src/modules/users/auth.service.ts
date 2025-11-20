@@ -4,7 +4,6 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { AppError } from '../../utils/appError';
 import User, { IUser } from './user.model';
-import FirebaseUser, { IFirebaseUser } from './firebase-user.model';
 import { AuthResponse } from './types/user.types';
 import { sendPasswordResetEmail } from '../../services/email.service';
 import { logger } from '../../utils/logger';
@@ -614,7 +613,7 @@ export const saveFirebaseUser = async (
   email: string,
   first_name: string,
   last_name: string
-): Promise<IFirebaseUser> => {
+): Promise<IUser> => {
   try {
     // Validate required fields
     if (!firebase_uid || !email || !first_name || !last_name) {
@@ -628,46 +627,60 @@ export const saveFirebaseUser = async (
     const trimmedLastName = last_name.trim();
 
     // Check if user with this firebase_uid already exists
-    let existingUser = await FirebaseUser.findOne({ firebase_uid: trimmedFirebaseUid });
+    let existingUser = await User.findOne({ firebase_uid: trimmedFirebaseUid });
 
     if (existingUser) {
       // Update existing user
       existingUser.email = trimmedEmail;
-      existingUser.first_name = trimmedFirstName;
-      existingUser.last_name = trimmedLastName;
+      existingUser.firstName = trimmedFirstName;
+      existingUser.lastName = trimmedLastName;
       await existingUser.save();
       logger.info(`Updated Firebase user with UID: ${trimmedFirebaseUid}`);
       return existingUser;
     }
 
-    // Check if user with same name already exists
-    const existingNameUser = await FirebaseUser.findOne({
-      first_name: trimmedFirstName,
-      last_name: trimmedLastName
-    });
+    // Check if user with same email already exists
+    const existingEmailUser = await User.findOne({ email: trimmedEmail });
 
-    if (existingNameUser) {
-      // User with same name exists - we'll still create/update based on firebase_uid
-      // But we can log a warning
-      logger.warn(`User with name ${trimmedFirstName} ${trimmedLastName} already exists with firebase_uid: ${existingNameUser.firebase_uid}`);
+    if (existingEmailUser) {
+      // Security check: If user already has a different firebase_uid, don't allow update
+      if (existingEmailUser.firebase_uid && existingEmailUser.firebase_uid !== trimmedFirebaseUid) {
+        throw new AppError('This email is already associated with a different Firebase account', 409);
+      }
       
-      // Create new user with this firebase_uid (since firebase_uid is unique)
-      const newUser = await FirebaseUser.create({
-        firebase_uid: trimmedFirebaseUid,
-        email: trimmedEmail,
-        first_name: trimmedFirstName,
-        last_name: trimmedLastName
-      });
-      logger.info(`Created new Firebase user with UID: ${trimmedFirebaseUid} (name conflict with existing user)`);
-      return newUser;
+      // Update existing user with firebase_uid (only if no firebase_uid or same firebase_uid)
+      existingEmailUser.firebase_uid = trimmedFirebaseUid;
+      existingEmailUser.firstName = trimmedFirstName;
+      existingEmailUser.lastName = trimmedLastName;
+      existingEmailUser.authProvider = 'google';
+      existingEmailUser.isOAuthUser = true;
+      await existingEmailUser.save();
+      logger.info(`Updated existing user with Firebase UID: ${trimmedFirebaseUid}`);
+      return existingEmailUser;
     }
 
     // No existing user found - create new one
-    const newUser = await FirebaseUser.create({
+    // Generate username from email, ensure it's at least 3 characters and unique
+    let emailPrefix = trimmedEmail.split('@')[0].toLowerCase();
+    emailPrefix = emailPrefix.replace(/[^a-z0-9]/g, ''); // Remove special characters
+    let generatedUsername = emailPrefix.length >= 3 ? emailPrefix : emailPrefix + '123';
+    
+    // Check if username already exists and generate unique one
+    let counter = 1;
+    const originalUsername = generatedUsername;
+    while (await User.findOne({ username: generatedUsername })) {
+      generatedUsername = `${originalUsername}${counter}`;
+      counter++;
+    }
+    
+    const newUser = await User.create({
       firebase_uid: trimmedFirebaseUid,
       email: trimmedEmail,
-      first_name: trimmedFirstName,
-      last_name: trimmedLastName
+      firstName: trimmedFirstName,
+      lastName: trimmedLastName,
+      username: generatedUsername,
+      authProvider: 'google',
+      isOAuthUser: true
     });
     
     logger.info(`Created new Firebase user with UID: ${trimmedFirebaseUid}`);
