@@ -27,7 +27,7 @@ interface IDashboardData {
  * @route   GET /api/dashboard
  * @access  Private (JWT required)
  */
-export const getDashboardData = async (_req: Request, res: Response): Promise<void> => {
+export const getDashboardData = async (req: Request, res: Response): Promise<void> => {
   try {
     // Fetch dashboard data with embedded games
     const dashboardData = await Dashboard.findOne({})
@@ -39,8 +39,17 @@ export const getDashboardData = async (_req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Prepare and send success response with only funGames
+    // Prepare user object with required fields
+    const user = req.user ? {
+      first_name: req.user.firstName || '',
+      last_name: req.user.lastName || '',
+      email: req.user.email || '',
+      profile_picture: req.user.avatar || null
+    } : null;
+
+    // Prepare and send success response with funGames and user
     res.apiSuccess({
+      user,
       funGames: dashboardData.funGames || []
     }, 'Dashboard data fetched successfully');
   } catch (error) {

@@ -367,6 +367,9 @@ export class App {
     const publicDir = path.join(process.cwd(), 'public');
     this.app.use(express.static(publicDir));
     
+    // Serve uploads directory for profile pictures
+    this.app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+    
     // Serve game-test.html explicitly (for backward compatibility)
     this.app.get('/game-test.html', (_req, res) => {
       const filePath = path.join(publicDir, 'game-test.html');
