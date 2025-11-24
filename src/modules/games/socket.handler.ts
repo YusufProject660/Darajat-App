@@ -6,6 +6,7 @@ import User from '../users/user.model';
 import { gameService } from './services/game.service';
 import { ClientEvents, InterServerEvents, ServerEvents, SocketData } from './types/game.types';
 import { logger } from '../../utils/logger';
+import { bufferManager } from './utils/bufferManager';
 
 /**
  * Authenticate socket connection using JWT token
@@ -106,7 +107,7 @@ async function authenticateSocket(socket: Socket, next: (err?: Error) => void) {
  * Handle player joining a room
  */
 async function handleJoinRoom(
-  _io: SocketIOServer,
+  io: SocketIOServer,
   socket: Socket<ClientEvents, ServerEvents, InterServerEvents, SocketData>,
   data: { 
     roomCode: string; 
@@ -270,9 +271,16 @@ async function handleJoinRoom(
         totalPlayers: room.players?.length || 0
       });
       
-      // Notify other players in the room
+      // Notify other players in the room with buffer tracking
       console.log('📢 Broadcasting player:joined event to other players in room:', roomCode);
-      socket.to(roomCode).emit('player:joined', {
+      
+      // Get all receivers (except sender)
+      const socketsInRoom = await io.in(roomCode).fetchSockets();
+      const receiverIds = socketsInRoom
+        .filter(s => s.data?.user?.id && s.data.user.id !== userId)
+        .map(s => s.data.user.id);
+
+      const playerJoinedData = {
         player: {
           id: userId,
           userId: userId,
@@ -289,8 +297,36 @@ async function handleJoinRoom(
           score: p.score || 0,
           isHost: p.isHost || false
         }))
-      });
-      console.log('✅ Event broadcasted to', room.players?.length - 1 || 0, 'other players');
+      };
+
+      // Create buffer if there are receivers
+      if (receiverIds.length > 0) {
+        const taskId = await bufferManager.createBuffer(
+          roomCode,
+          userId,
+          'player:joined',
+          playerJoinedData,
+          receiverIds
+        );
+
+        // Broadcast with taskId
+        socket.to(roomCode).emit('player:joined', {
+          ...playerJoinedData,
+          taskId,
+          senderId: userId
+        } as any);
+
+        logger.info('📤 Player joined event sent with buffer', { 
+          taskId, 
+          roomCode, 
+          receiverCount: receiverIds.length 
+        });
+      } else {
+        // No receivers, normal emit (existing flow)
+        socket.to(roomCode).emit('player:joined', playerJoinedData);
+      }
+      
+      console.log('✅ Event broadcasted to', receiverIds.length || room.players?.length - 1 || 0, 'other players');
       
       // Successfully joined the room
       safeCallback({ 
@@ -427,6 +463,9 @@ async function handleDisconnect(
 export function setupSocketHandlers(io: SocketIOServer<ClientEvents, ServerEvents, InterServerEvents, SocketData>): void {
   logger.info('🚀 WebSocket server is now listening for connections on path: /ws/socket.io');
   
+  // Initialize buffer manager
+  bufferManager.initialize(io);
+  
   // Apply authentication middleware
   io.use((socket, next) => authenticateSocket(socket as Socket<ClientEvents, ServerEvents, InterServerEvents, SocketData>, next));
   
@@ -479,6 +518,33 @@ export function setupSocketHandlers(io: SocketIOServer<ClientEvents, ServerEvent
     // Handle answer submission
     socket.on('answer:submit' as any, async (data: { questionId: string; answer: any }, callback?: (response: { success: boolean; error?: string; data?: any }) => void) => {
       await handleSubmitAnswer(io, socket, data, callback);
+    });
+
+    // Handle message acknowledgment
+    socket.on('message:ack' as any, async (data: { taskId: string }, callback?: (response: { success: boolean; allAcknowledged?: boolean; error?: string }) => void) => {
+      try {
+        const socketData = socket.data;
+        if (!socketData || !socketData.user) {
+          return callback?.({ success: false, error: 'Socket not authenticated' });
+        }
+
+        const receiverId = socketData.user.id;
+        const { taskId } = data;
+
+        if (!taskId) {
+          return callback?.({ success: false, error: 'Task ID is required' });
+        }
+
+        // Acknowledge message
+        const allAcknowledged = await bufferManager.acknowledgeMessage(taskId, receiverId);
+
+        logger.info('✅ Message acknowledged', { taskId, receiverId, allAcknowledged });
+
+        callback?.({ success: true, allAcknowledged });
+      } catch (error: any) {
+        logger.error('Error acknowledging message', { error: error.message });
+        callback?.({ success: false, error: error.message });
+      }
     });
 
     // Handle disconnection

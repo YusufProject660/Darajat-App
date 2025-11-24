@@ -1,10 +1,28 @@
-require('ts-node/register');
 require('dotenv').config();
 const mongoose = require('mongoose');
 
-// Import models using TypeScript import syntax
-const { Dashboard } = require('../src/modules/dashboard/dashboard.model');
-const { DashboardGame } = require('../src/modules/dashboard/models/dashboard-game.model');
+// Define schema directly to avoid TypeScript compilation issues
+const dashboardSchema = new mongoose.Schema({
+  banner: {
+    title: String,
+    description: String,
+    createButtonText: String,
+    image: String
+  },
+  actions: {
+    joinGameText: String,
+    howToPlayLink: String
+  },
+  funGames: [{
+    id: String,
+    title: String,
+    description: String,
+    image: String,
+    status: String
+  }]
+}, { timestamps: true });
+
+const Dashboard = mongoose.models.Dashboard || mongoose.model('Dashboard', dashboardSchema);
 
 // Connect to MongoDB
 const connectDB = async () => {
@@ -31,7 +49,23 @@ const dashboardData = {
   actions: {
     joinGameText: "Join Game",
     howToPlayLink: "https://darajat.com/help/how-to-play"
-  }
+  },
+  funGames: [
+    {
+      id: "trivia_rush",
+      title: "Trivia Rush",
+      description: "Test your Islamic knowledge",
+      image: "/uploads/games-image/trivia_rush.png",
+      status: "available"
+    },
+    {
+      id: "act_it",
+      title: "Act It",
+      description: "Act out clues of your team",
+      image: "/uploads/games-image/trivia_rush.png",
+      status: "coming_soon"
+    }
+  ]
 };
 
 // Games data
@@ -40,14 +74,14 @@ const gamesData = [
     id: "trivia_rush",
     title: "Trivia Rush",
     description: "Test your Islamic knowledge",
-    image: "https://darajat.com/assets/trivia.png",
+    image: "/uploads/games-image/trivia_rush.png",
     status: "available"
   },
   {
     id: "act_it",
     title: "Act It",
     description: "Act out clues of your team",
-    image: "https://darajat.com/assets/actit.png",
+    image: "/uploads/games-image/act_it.png",
     status: "coming_soon"
   }
 ];
@@ -60,13 +94,14 @@ const seedDatabase = async () => {
     
     // Clear existing data
     await Dashboard.deleteMany({});
-    await DashboardGame.deleteMany({});
     
-    // Insert new data
+    // Insert new data with funGames
     await Dashboard.create(dashboardData);
-    await DashboardGame.insertMany(gamesData);
     
-    console.log('✅ Dashboard data seeded successfully!');
+    console.log('✅ Dashboard data with funGames seeded successfully!');
+    console.log('📸 Image paths updated:');
+    console.log('   - trivia_rush: /uploads/games-image/trivia_rush.png');
+    console.log('   - act_it: /uploads/games-image/act_it.png');
     process.exit(0);
   } catch (error) {
     console.error('❌ Error seeding database:', error);

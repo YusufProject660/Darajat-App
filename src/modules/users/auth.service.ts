@@ -660,10 +660,10 @@ export const saveFirebaseUser = async (
     }
 
     // No existing user found - create new one
-    // Generate username from email, ensure it's at least 3 characters and unique
+    // Generate username from email and ensure it's unique
     let emailPrefix = trimmedEmail.split('@')[0].toLowerCase();
     emailPrefix = emailPrefix.replace(/[^a-z0-9]/g, ''); // Remove special characters
-    let generatedUsername = emailPrefix.length >= 3 ? emailPrefix : emailPrefix + '123';
+    let generatedUsername = emailPrefix || 'user' + Math.random().toString(36).substring(2, 8);
     
     // Check if username already exists and generate unique one
     let counter = 1;

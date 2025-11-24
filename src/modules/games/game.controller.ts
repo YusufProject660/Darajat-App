@@ -41,13 +41,40 @@ const cleanGameResponse = (game: any) => {
     delete cleanedGame._id;
   }
 
-  // Rename _id to question_id in questions array
+  // Rename _id to question_id in questions array and add option IDs
   if (Array.isArray(cleanedGame.questions)) {
     cleanedGame.questions = cleanedGame.questions.map((question: any) => {
       if (question._id) {
         const updatedQuestion = { ...question };
         updatedQuestion.question_id = updatedQuestion._id;
         delete updatedQuestion._id;
+        
+        // Store original options array before formatting
+        const originalOptions = Array.isArray(updatedQuestion.options) 
+          ? [...updatedQuestion.options] 
+          : [];
+        
+        // Add option IDs to options array
+        if (Array.isArray(updatedQuestion.options)) {
+          updatedQuestion.options = updatedQuestion.options.map((option: string, index: number) => ({
+            option_id: index,
+            text: option
+          }));
+        }
+        
+        // Add correctAnswer with option_id and text
+        if (updatedQuestion.correctAnswer !== undefined && originalOptions.length > 0) {
+          const correctAnswerIndex = updatedQuestion.correctAnswer;
+          updatedQuestion.correctAnswer = {
+            option_id: correctAnswerIndex,
+            text: originalOptions[correctAnswerIndex] || ''
+          };
+        }
+        
+        // Remove deck and deckId fields
+        delete updatedQuestion.deck;
+        delete updatedQuestion.deckId;
+        
         return updatedQuestion;
       }
       return question;
@@ -290,14 +317,42 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
         });
       }
 
+      // Populate players for response
+      const populatedRoom = await GameRoom.findById(updatedRoom._id)
+        .populate({
+          path: 'players.userId',
+          select: 'username avatar'
+        })
+        .lean() as any;
+
+      // Format players with is_me field
+      const formattedPlayers = (populatedRoom?.players || []).map((p: any) => {
+        const playerUserId = p.userId?._id?.toString() || p.userId?.toString() || p.userId;
+        const currentUserId = userId.toString();
+        const isMe = playerUserId === currentUserId;
+
+        return {
+          userId: p.userId ? {
+            _id: p.userId._id?.toString() || p.userId.toString(),
+            username: p.userId.username || p.username
+          } : {
+            _id: p.userId?.toString() || p.userId,
+            username: p.username
+          },
+          username: p.username,
+          avatar: p.avatar || '',
+          isHost: p.isHost || false,
+          is_me: isMe,
+          _id: p._id?.toString() || p._id
+        };
+      });
+
       return res.apiSuccess({
-        roomCode: updatedRoom.roomCode,
-        categories: updatedRoom.settings.categories,
-        numberOfQuestions: updatedRoom.settings.numberOfQuestions,
-        players: updatedRoom.players.map((p: any) => ({
-          username: p.username.includes('@') ? p.username.split('@')[0] : p.username
-        })),
-        status: updatedRoom.status
+        roomCode: populatedRoom?.roomCode || updatedRoom.roomCode,
+        categories: populatedRoom?.settings?.categories || updatedRoom.settings?.categories,
+        numberOfQuestions: populatedRoom?.settings?.numberOfQuestions || updatedRoom.settings?.numberOfQuestions,
+        players: formattedPlayers,
+        status: populatedRoom?.status || updatedRoom.status
       }, 'Game joined successfully');
     } catch (error: any) {
       if (error.message === 'Room not found') {
