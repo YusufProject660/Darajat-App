@@ -437,7 +437,7 @@ export class App {
           methods: ['GET', 'POST'],
           credentials: true
         },
-        path: '/ws/socket.io',
+      
         maxHttpBufferSize: 1e8, // 100MB
         connectTimeout: 30000,  // 30 seconds
         transports: ['websocket', 'polling'],

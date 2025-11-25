@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Connection Test</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        .input-group {
+            margin: 20px 0;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .disconnect-btn {
+            background: #f44336;
+        }
+        .disconnect-btn:hover {
+            background: #da190b;
+        }
+        .status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .log-container {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .log-entry {
+            padding: 8px;
+            margin: 5px 0;
+            border-left: 3px solid #007bff;
+            background: white;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .log-entry.error {
+            border-left-color: #dc3545;
+            background: #ffe6e6;
+        }
+        .log-entry.success {
+            border-left-color: #28a745;
+            background: #e6ffe6;
+        }
+        .log-entry.warning {
+            border-left-color: #ffc107;
+            background: #fff9e6;
+        }
+        .clear-btn {
+            background: #6c757d;
+            font-size: 12px;
+            padding: 5px 15px;
+        }
+        .clear-btn:hover {
+            background: #5a6268;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔌 Socket.IO Connection Test</h1>
+        
+        <div class="input-group">
+            <label for="serverUrl">Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:5000" placeholder="http://localhost:5000">
+        </div>
+        
+        <div class="input-group">
+            <label for="token">JWT Token:</label>
+            <input type="text" id="token" placeholder="Enter your JWT token here">
+        </div>
+        
+        <div>
+            <button id="connectBtn" onclick="connectSocket()">Connect</button>
+            <button id="disconnectBtn" class="disconnect-btn" onclick="disconnectSocket()" disabled>Disconnect</button>
+            <button class="clear-btn" onclick="clearLogs()">Clear Logs</button>
+        </div>
+        
+        <div id="status" class="status disconnected">Disconnected</div>
+        
+        <div class="log-container">
+            <div id="logs"></div>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+
+        function log(message, type = 'info') {
+            const logsDiv = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            logsDiv.appendChild(entry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        function updateStatus(status, message) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${status}`;
+            statusDiv.textContent = message;
+        }
+
+        function connectSocket() {
+            const serverUrl = document.getElementById('serverUrl').value.trim();
+            const token = document.getElementById('token').value.trim();
+
+            if (!serverUrl) {
+                alert('Please enter server URL');
+                return;
+            }
+
+            if (!token) {
+                alert('Please enter JWT token');
+                return;
+            }
+
+            if (socket && socket.connected) {
+                log('Already connected!', 'warning');
+                return;
+            }
+
+            log(`🔌 Connecting to ${serverUrl}...`, 'info');
+            updateStatus('connecting', 'Connecting...');
+            
+            document.getElementById('connectBtn').disabled = true;
+            document.getElementById('disconnectBtn').disabled = false;
+
+            try {
+                socket = io(serverUrl, {
+                    auth: { token: token },
+                    transports: ['websocket', 'polling'],
+                    path: '/ws/socket.io',
+                    reconnection: true,
+                    reconnectionDelay: 1000,
+                    reconnectionAttempts: 5
+                });
+
+                socket.on('connect', () => {
+                    log('✅ Connected successfully!', 'success');
+                    log(`Socket ID: ${socket.id}`, 'info');
+                    updateStatus('connected', `Connected (ID: ${socket.id})`);
+                });
+
+                socket.on('disconnect', (reason) => {
+                    log(`❌ Disconnected: ${reason}`, 'error');
+                    updateStatus('disconnected', 'Disconnected');
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                });
+
+                socket.on('connect_error', (error) => {
+                    log(`❌ Connection error: ${error.message}`, 'error');
+                    updateStatus('disconnected', `Error: ${error.message}`);
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                });
+
+                socket.on('error', (error) => {
+                    log(`❌ Socket error: ${JSON.stringify(error)}`, 'error');
+                });
+
+                // Listen for game events
+                socket.on('player:joined', (data) => {
+                    log(`👤 Player joined: ${JSON.stringify(data)}`, 'info');
+                });
+
+                socket.on('player:left', (data) => {
+                    log(`👋 Player left: ${JSON.stringify(data)}`, 'info');
+                });
+
+                socket.on('game:started', (data) => {
+                    log(`🎮 Game started: ${JSON.stringify(data)}`, 'success');
+                });
+
+                socket.on('question:answered', (data) => {
+                    log(`✅ Answer submitted: ${JSON.stringify(data)}`, 'info');
+                });
+
+                socket.on('error:general', (data) => {
+                    log(`⚠️ General error: ${JSON.stringify(data)}`, 'error');
+                });
+
+                socket.on('error:game', (data) => {
+                    log(`⚠️ Game error: ${JSON.stringify(data)}`, 'error');
+                });
+
+            } catch (error) {
+                log(`❌ Failed to create socket: ${error.message}`, 'error');
+                updateStatus('disconnected', `Error: ${error.message}`);
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('disconnectBtn').disabled = true;
+            }
+        }
+
+        function disconnectSocket() {
+            if (socket) {
+                log('🔌 Disconnecting...', 'info');
+                socket.disconnect();
+                socket = null;
+                updateStatus('disconnected', 'Disconnected');
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('disconnectBtn').disabled = true;
+            }
+        }
+
+        // Auto-clear logs on page load
+        window.onload = function() {
+            log('Socket.IO Test Client Ready', 'info');
+            log('Enter your server URL and JWT token, then click Connect', 'info');
+        };
+    </script>
+</body>
+</html>
+
