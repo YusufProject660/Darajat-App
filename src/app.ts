@@ -461,7 +461,7 @@ export class App {
       console.log('🔌 SOCKET.IO INITIALIZATION');
       console.log('═══════════════════════════════════════════════════════════');
       console.log('✅ Socket.IO server initialized successfully');
-      console.log('Path: /ws/socket.io');
+      console.log('Path: /socket.io (default)');
       console.log('CORS Origin:', process.env.NODE_ENV === 'production' 
         ? process.env.FRONTEND_URL || 'https://your-production-domain.com'
         : '*');

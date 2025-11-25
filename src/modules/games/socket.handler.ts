@@ -328,14 +328,35 @@ async function handleJoinRoom(
       
       console.log('✅ Event broadcasted to', receiverIds.length || room.players?.length - 1 || 0, 'other players');
       
-      // Successfully joined the room
+      // Successfully joined the room - Convert to serializable object
+      const serializableRoom = {
+        roomCode: room.roomCode || roomCode,
+        status: room.status,
+        hostId: room.hostId?.toString() || room.hostId,
+        players: (room.players || []).map((p: any) => ({
+          userId: p.userId?.toString() || p.userId,
+          username: p.username,
+          avatar: p.avatar || '',
+          score: p.score || 0,
+          isHost: p.isHost || false,
+          isReady: p.isReady || false
+        })),
+        code: room.roomCode || roomCode
+      };
+
+      const serializablePlayer = player ? {
+        userId: player.userId?.toString() || player.userId,
+        username: player.username,
+        avatar: player.avatar || '',
+        score: player.score || 0,
+        isHost: player.isHost || false,
+        isReady: player.isReady || false
+      } : null;
+
       safeCallback({ 
         success: true,
-        room: {
-          ...room,
-          code: room.roomCode || roomCode
-        },
-        player
+        room: serializableRoom,
+        player: serializablePlayer
       });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'An unknown error occurred';

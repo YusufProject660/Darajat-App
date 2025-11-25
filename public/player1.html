@@ -461,8 +461,7 @@
             log('🔌 Connecting to socket...', 'info');
             socket = io(SOCKET_URL, {
                 auth: { token: token },
-                transports: ['websocket', 'polling'],
-                path: '/ws/socket.io'
+                transports: ['websocket', 'polling']
             });
 
             socket.on('connect', () => {
@@ -484,12 +483,76 @@
 
             // Game Events
             socket.on('player:joined', (data) => {
-                log('👤 Player joined: ' + JSON.stringify(data), 'success');
+                log('════════════════════════════════════════════════', 'success');
+                log('👤 👤 👤 NEW PLAYER JOINED! 👤 👤 👤', 'success');
+                log('════════════════════════════════════════════════', 'success');
+                
+                // Display all player data
+                const player = data.player || {};
+                log('📋 PLAYER DETAILS:', 'info');
+                log('   Name: ' + (player.username || 'Unknown'), 'success');
+                log('   Player ID: ' + (player.userId || player.id || 'Unknown'), 'info');
+                log('   Avatar: ' + (player.avatar || 'No avatar'), 'info');
+                log('   Score: ' + (player.score || 0), 'info');
+                log('   Is Host: ' + (player.isHost ? 'Yes 👑' : 'No'), 'info');
+                log('   Ready Status: ' + (player.isReady ? 'Ready ✓' : 'Not Ready'), 'info');
+                
+                log('📊 ROOM STATUS:', 'info');
+                log('   Total Players: ' + (data.players?.length || 0), 'info');
+                log('   All Players:', 'info');
+                (data.players || []).forEach((p, index) => {
+                    log(`      ${index + 1}. ${p.username} ${p.isHost ? '(Host 👑)' : ''} ${p.isReady ? '(Ready ✓)' : '(Not Ready)'}`, 'info');
+                });
+                log('════════════════════════════════════════════════', 'info');
+                
+                // Show detailed notification in UI
+                if (player.username) {
+                    const playerInfo = `
+                        <div style="padding: 15px; background: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 5px; margin: 10px 0;">
+                            <h4 style="margin: 0 0 10px 0; color: #2e7d32;">🎉 New Player Joined!</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.9em;">
+                                <div><strong>Name:</strong> ${player.username}</div>
+                                <div><strong>ID:</strong> ${player.userId || player.id || 'N/A'}</div>
+                                <div><strong>Score:</strong> ${player.score || 0}</div>
+                                <div><strong>Status:</strong> ${player.isHost ? '👑 Host' : 'Player'}</div>
+                                <div><strong>Ready:</strong> ${player.isReady ? '✓ Yes' : '⏳ No'}</div>
+                                <div><strong>Avatar:</strong> ${player.avatar || 'None'}</div>
+                            </div>
+                            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #c8e6c9;">
+                                <strong>Total Players in Room:</strong> ${data.players?.length || 0}
+                            </div>
+                        </div>
+                    `;
+                    const statusDiv = document.getElementById('lobbyStatus');
+                    if (statusDiv) {
+                        statusDiv.innerHTML = playerInfo;
+                        statusDiv.className = 'status success';
+                        // Auto-hide after 5 seconds
+                        setTimeout(() => {
+                            statusDiv.innerHTML = '';
+                        }, 5000);
+                    }
+                }
+                
                 updateLobby();
             });
 
             socket.on('player:left', (data) => {
-                log('👋 Player left: ' + JSON.stringify(data), 'warning');
+                log('════════════════════════════════════════════════', 'warning');
+                log('👋 PLAYER LEFT THE ROOM', 'warning');
+                log('════════════════════════════════════════════════', 'warning');
+                log('Player ID: ' + (data.playerId || 'Unknown'), 'warning');
+                log('Remaining Players: ' + (data.players?.length || 0), 'info');
+                log('════════════════════════════════════════════════', 'info');
+                
+                if (data.playerId) {
+                    showStatus('lobbyStatus', `👋 A player left the room`, 'warning');
+                    setTimeout(() => {
+                        const statusDiv = document.getElementById('lobbyStatus');
+                        if (statusDiv) statusDiv.textContent = '';
+                    }, 3000);
+                }
+                
                 updateLobby();
             });
 
@@ -605,25 +668,10 @@
                     log('✅ Step 3a: Room created in database: ' + currentRoom, 'success');
                     showStatus('createRoomStatus', 'Room created: ' + currentRoom, 'success');
                     
-                    // ============================================
-                    // PART 2: SOCKET EMIT (Real-time Join)
-                    // ============================================
-                    // Socket room join karo for real-time updates
-                    // Other players ko automatically notify hoga
-                    log('🔌 Step 3b: Joining socket room for real-time updates...', 'info');
-                    socket.emit('room:join', {
-                        roomCode: currentRoom,
-                        playerName: currentUser.email?.split('@')[0] || 'Player1',
-                        isHost: true
-                    }, (response) => {
-                        if (response && response.success) {
-                            log('✅ Step 3b: Joined socket room! Real-time updates active.', 'success');
-                            document.getElementById('lobbySection').classList.remove('hidden');
-                            updateLobby();
-                        } else {
-                            log('⚠️ Socket join response: ' + (response?.error || 'Unknown'), 'warning');
-                        }
-                    });
+                    // Socket join is now handled by joinGame API automatically
+                    log('✅ Socket room join handled by API automatically', 'success');
+                    document.getElementById('lobbySection').classList.remove('hidden');
+                    updateLobby();
                 } else {
                     log('❌ Failed to create room: ' + data.message, 'error');
                     showStatus('createRoomStatus', data.message, 'error');
@@ -676,27 +724,21 @@
                     currentRoom = roomCode;
                     isHost = false;
                     log('✅ Step 4a: Joined room in database: ' + currentRoom, 'success');
-                    showStatus('joinRoomStatus', 'Joined room: ' + currentRoom, 'success');
+                    log('📊 Room Details:', 'info');
+                    log('   - Room Code: ' + currentRoom, 'info');
+                    log('   - Total Players: ' + (data.data.players?.length || 0), 'info');
+                    log('   - Room Status: ' + (data.data.status || 'waiting'), 'info');
+                    log('   - Max Players: ' + (data.data.settings?.maximumPlayers || 'N/A'), 'info');
+                    showStatus('joinRoomStatus', '✅ Joined room: ' + currentRoom, 'success');
                     
-                    // ============================================
-                    // PART 2: SOCKET EMIT (Real-time Join)
-                    // ============================================
-                    // Socket room join karo for real-time updates
-                    // Other players ko automatically notify hoga
-                    log('🔌 Step 4b: Joining socket room for real-time updates...', 'info');
-                    socket.emit('room:join', {
-                        roomCode: currentRoom,
-                        playerName: currentUser.email?.split('@')[0] || 'Player1',
-                        isHost: false
-                    }, (response) => {
-                        if (response && response.success) {
-                            log('✅ Step 4b: Joined socket room! Real-time updates active.', 'success');
-                            document.getElementById('lobbySection').classList.remove('hidden');
-                            updateLobby();
-                        } else {
-                            log('⚠️ Socket join response: ' + (response?.error || 'Unknown'), 'warning');
-                        }
-                    });
+                    // Show lobby section
+                    document.getElementById('lobbySection').classList.remove('hidden');
+                    updateLobby();
+                    
+                    // Socket join is now handled by joinGame API automatically
+                    log('✅ Socket room join handled by API automatically', 'success');
+                    log('🎉 You will now receive events when other players join/leave!', 'success');
+                    log('📡 Listening for: player:joined, player:left, player:ready, game:started', 'info');
                 } else {
                     log('❌ Failed to join room: ' + data.message, 'error');
                     showStatus('joinRoomStatus', data.message, 'error');
@@ -724,14 +766,22 @@
                         <p><strong>Players:</strong> ${lobby.players?.length || 0} / ${lobby.settings?.maximumPlayers || 0}</p>
                     `;
 
-                    let playersHtml = '';
+                    let playersHtml = '<h4 style="margin-bottom: 10px; color: #333;">Players in Room:</h4>';
                     (lobby.players || []).forEach((p, i) => {
+                        const isMe = p.userId?._id === currentUser?.user_id || p.userId === currentUser?.user_id;
                         playersHtml += `
-                            <div class="player-item">
-                                <span>${i + 1}. ${p.username}</span>
-                                <span class="badge ${p.isHost ? 'host' : ''} ${p.isReady ? 'ready' : ''}">
-                                    ${p.isHost ? '👑 Host' : ''} ${p.isReady ? '✓ Ready' : 'Not Ready'}
-                                </span>
+                            <div class="player-item" style="padding: 10px; margin: 5px 0; background: ${isMe ? '#e3f2fd' : 'white'}; border-radius: 5px; border-left: 3px solid ${isMe ? '#2196f3' : '#ddd'};">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div>
+                                        <span style="font-weight: ${isMe ? 'bold' : 'normal'}; color: ${isMe ? '#1976d2' : '#333'};">
+                                            ${i + 1}. ${p.username} ${isMe ? '(You)' : ''}
+                                        </span>
+                                    </div>
+                                    <span class="badge ${p.isHost ? 'host' : ''} ${p.isReady ? 'ready' : ''}">
+                                        ${p.isHost ? '👑 Host' : ''} ${p.isReady ? '✓ Ready' : '⏳ Not Ready'}
+                                    </span>
+                                </div>
+                                ${p.score !== undefined ? `<div style="font-size: 0.85em; color: #666; margin-top: 5px;">Score: ${p.score}</div>` : ''}
                             </div>
                         `;
                     });

@@ -311,7 +311,6 @@
             socket = io(SOCKET_URL, {
                 auth: { token: token },
                 transports: ['websocket', 'polling'],
-                path: '/ws/socket.io'
             });
 
             socket.on('connect', () => {
@@ -406,18 +405,10 @@
                     log('✅ Joined room via API: ' + currentRoom, 'success');
                     showStatus('joinRoomStatus', 'Joined room: ' + currentRoom, 'success');
                     
-                    // Join via socket
-                    socket.emit('room:join', {
-                        roomCode: currentRoom,
-                        playerName: currentUser.email?.split('@')[0] || 'Player3',
-                        isHost: false
-                    }, (response) => {
-                        if (response && response.success) {
-                            log('✅ Joined room via socket', 'success');
-                            document.getElementById('lobbySection').classList.remove('hidden');
-                            updateLobby();
-                        }
-                    });
+                    // Socket join is now handled by joinGame API automatically
+                    log('✅ Socket room join handled by API automatically', 'success');
+                    document.getElementById('lobbySection').classList.remove('hidden');
+                    updateLobby();
                 } else {
                     log('❌ Failed to join room: ' + data.message, 'error');
                     showStatus('joinRoomStatus', data.message, 'error');

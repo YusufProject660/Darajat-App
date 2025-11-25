@@ -3,156 +3,264 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Socket.IO Connection Test</title>
+    <title>Socket Test - Login & Join Room</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 50px auto;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
             padding: 20px;
-            background: #f5f5f5;
         }
         .container {
+            max-width: 900px;
+            margin: 0 auto;
             background: white;
-            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+            color: white;
+            padding: 25px;
+            text-align: center;
+        }
+        .header h1 { font-size: 2em; margin-bottom: 5px; }
+        .content { padding: 30px; }
+        .section {
+            background: #f8f9fa;
+            padding: 20px;
             border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            border-left: 4px solid #4caf50;
         }
-        h1 {
-            color: #333;
-            border-bottom: 2px solid #4CAF50;
-            padding-bottom: 10px;
+        .section h2 {
+            color: #4caf50;
+            margin-bottom: 15px;
+            font-size: 1.3em;
         }
-        .input-group {
-            margin: 20px 0;
+        .form-group {
+            margin-bottom: 15px;
         }
         label {
             display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-            color: #555;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
         }
         input {
             width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 14px;
-            box-sizing: border-box;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 15px;
+            transition: border-color 0.3s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #4caf50;
+            box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
         }
         button {
-            background: #4CAF50;
+            background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
             color: white;
-            padding: 12px 30px;
             border: none;
-            border-radius: 5px;
-            cursor: pointer;
+            padding: 12px 25px;
+            border-radius: 8px;
             font-size: 16px;
-            margin: 10px 5px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            width: 100%;
+            margin-top: 10px;
         }
         button:hover {
-            background: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4);
         }
         button:disabled {
-            background: #ccc;
+            opacity: 0.6;
             cursor: not-allowed;
+            transform: none;
         }
         .disconnect-btn {
-            background: #f44336;
-        }
-        .disconnect-btn:hover {
-            background: #da190b;
+            background: linear-gradient(135deg, #f44336 0%, #da190b 100%);
         }
         .status {
-            padding: 15px;
-            margin: 15px 0;
-            border-radius: 5px;
-            font-weight: bold;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 10px;
+            font-weight: 500;
+            text-align: center;
         }
-        .status.connected {
+        .status.success {
             background: #d4edda;
             color: #155724;
             border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
         }
         .status.disconnected {
             background: #f8d7da;
             color: #721c24;
             border: 1px solid #f5c6cb;
         }
-        .status.connecting {
-            background: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeaa7;
-        }
         .log-container {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 5px;
-            padding: 15px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 8px;
             max-height: 400px;
             overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
             margin-top: 20px;
         }
         .log-entry {
+            margin-bottom: 8px;
             padding: 8px;
-            margin: 5px 0;
-            border-left: 3px solid #007bff;
-            background: white;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-        }
-        .log-entry.error {
-            border-left-color: #dc3545;
-            background: #ffe6e6;
+            border-left: 3px solid transparent;
+            background: rgba(255,255,255,0.05);
+            border-radius: 3px;
         }
         .log-entry.success {
-            border-left-color: #28a745;
-            background: #e6ffe6;
+            border-left-color: #4caf50;
+            color: #4caf50;
+        }
+        .log-entry.error {
+            border-left-color: #f44336;
+            color: #f44336;
+        }
+        .log-entry.info {
+            border-left-color: #2196f3;
+            color: #2196f3;
         }
         .log-entry.warning {
-            border-left-color: #ffc107;
-            background: #fff9e6;
+            border-left-color: #ff9800;
+            color: #ff9800;
         }
         .clear-btn {
             background: #6c757d;
-            font-size: 12px;
-            padding: 5px 15px;
+            font-size: 14px;
+            padding: 8px 20px;
+            margin-top: 10px;
         }
         .clear-btn:hover {
             background: #5a6268;
+        }
+        .hidden {
+            display: none;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔌 Socket.IO Connection Test</h1>
-        
-        <div class="input-group">
-            <label for="serverUrl">Server URL:</label>
-            <input type="text" id="serverUrl" value="http://localhost:5000" placeholder="http://localhost:5000">
+        <div class="header">
+            <h1>🔌 Socket Test - Login & Join Room</h1>
+            <p>Simple testing tool for socket connection</p>
         </div>
         
-        <div class="input-group">
-            <label for="token">JWT Token:</label>
-            <input type="text" id="token" placeholder="Enter your JWT token here">
-        </div>
-        
-        <div>
-            <button id="connectBtn" onclick="connectSocket()">Connect</button>
-            <button id="disconnectBtn" class="disconnect-btn" onclick="disconnectSocket()" disabled>Disconnect</button>
-            <button class="clear-btn" onclick="clearLogs()">Clear Logs</button>
-        </div>
-        
-        <div id="status" class="status disconnected">Disconnected</div>
-        
-        <div class="log-container">
-            <div id="logs"></div>
+        <div class="content">
+            <!-- Login Section -->
+            <div class="section">
+                <h2>1️⃣ Login</h2>
+                <div class="form-group">
+                    <label for="serverUrl">Server URL:</label>
+                    <input type="text" id="serverUrl" value="http://localhost:5000" placeholder="http://localhost:5000">
+                    <button onclick="testConnection()" style="margin-top: 5px; padding: 8px 15px; font-size: 14px;">Test Connection</button>
+                </div>
+                <div class="form-group">
+                    <label for="email">Email:</label>
+                    <input type="email" id="email" placeholder="Enter your email">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password:</label>
+                    <input type="password" id="password" placeholder="Enter your password">
+                </div>
+                <button onclick="handleLogin()" id="loginBtn">Login</button>
+                <div id="loginStatus"></div>
+            </div>
+
+            <!-- Socket Connection Section -->
+            <div class="section" id="socketSection" style="display: none;">
+                <h2>2️⃣ Socket Connection</h2>
+                <button onclick="connectSocket()" id="connectBtn">Connect Socket</button>
+                <button onclick="disconnectSocket()" class="disconnect-btn" id="disconnectBtn" disabled>Disconnect</button>
+                <div id="socketStatus" class="status disconnected">Not Connected</div>
+            </div>
+
+            <!-- Create Room Section -->
+            <div class="section" id="createRoomSection" style="display: none;">
+                <h2>3️⃣ Create Room</h2>
+                <div class="form-group">
+                    <label for="numberOfQuestions">Number of Questions:</label>
+                    <input type="number" id="numberOfQuestions" value="10" min="1" max="60">
+                </div>
+                <div class="form-group">
+                    <label for="maximumPlayers">Maximum Players:</label>
+                    <input type="number" id="maximumPlayers" value="4" min="2" max="10">
+                </div>
+                <div class="form-group">
+                    <label>Categories:</label>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                        <label style="display: flex; align-items: center; font-weight: normal;">
+                            <input type="checkbox" id="catQuran" checked style="width: auto; margin-right: 5px;">
+                            Quran
+                        </label>
+                        <label style="display: flex; align-items: center; font-weight: normal;">
+                            <input type="checkbox" id="catHadith" checked style="width: auto; margin-right: 5px;">
+                            Hadith
+                        </label>
+                        <label style="display: flex; align-items: center; font-weight: normal;">
+                            <input type="checkbox" id="catHistory" style="width: auto; margin-right: 5px;">
+                            History
+                        </label>
+                        <label style="display: flex; align-items: center; font-weight: normal;">
+                            <input type="checkbox" id="catFiqh" style="width: auto; margin-right: 5px;">
+                            Fiqh
+                        </label>
+                    </div>
+                </div>
+                <button onclick="createRoom()" id="createRoomBtn">Create Room</button>
+                <div id="createRoomStatus"></div>
+            </div>
+
+            <!-- Join Room Section -->
+            <div class="section" id="joinRoomSection" style="display: none;">
+                <h2>4️⃣ Join Room</h2>
+                <div class="form-group">
+                    <label for="roomCode">Room Code:</label>
+                    <input type="text" id="roomCode" placeholder="Enter room code (e.g., ROOM1234567890)" style="text-transform: uppercase;">
+                </div>
+                <button onclick="joinRoom()" id="joinRoomBtn">Join Room</button>
+                <div id="joinRoomStatus"></div>
+            </div>
+
+            <!-- Logs Section -->
+            <div class="section">
+                <h2>📋 Logs</h2>
+                <button class="clear-btn" onclick="clearLogs()">Clear Logs</button>
+                <div class="log-container">
+                    <div id="logs"></div>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
         let socket = null;
+        let token = null;
+        let apiUrl = 'http://localhost:5000';
 
         function log(message, type = 'info') {
             const logsDiv = document.getElementById('logs');
@@ -166,65 +274,225 @@
 
         function clearLogs() {
             document.getElementById('logs').innerHTML = '';
+            log('Logs cleared', 'info');
         }
 
-        function updateStatus(status, message) {
-            const statusDiv = document.getElementById('status');
-            statusDiv.className = `status ${status}`;
-            statusDiv.textContent = message;
+        function showStatus(elementId, message, type) {
+            const statusDiv = document.getElementById(elementId);
+            if (statusDiv) {
+                statusDiv.className = `status ${type}`;
+                statusDiv.textContent = message;
+            }
         }
 
-        function connectSocket() {
-            const serverUrl = document.getElementById('serverUrl').value.trim();
-            const token = document.getElementById('token').value.trim();
-
-            if (!serverUrl) {
-                alert('Please enter server URL');
+        // Test Server Connection
+        async function testConnection() {
+            apiUrl = document.getElementById('serverUrl').value.trim().replace(/\/$/, '');
+            
+            if (!apiUrl) {
+                log('❌ Please enter server URL', 'error');
                 return;
             }
 
+            try {
+                log(`🔍 Testing connection to ${apiUrl}...`, 'info');
+                
+                // Try to fetch a simple endpoint or health check
+                const response = await fetch(`${apiUrl}/health`, {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                }).catch(() => {
+                    // If /health doesn't exist, try the API base
+                    return fetch(`${apiUrl}/api/auth/login`, {
+                        method: 'OPTIONS',
+                        headers: { 'Accept': 'application/json' }
+                    });
+                });
+
+                if (response.ok || response.status === 404 || response.status === 405) {
+                    log('✅ Server is reachable!', 'success');
+                    
+                    // Test socket endpoint
+                    log('🔍 Testing socket endpoint...', 'info');
+                    try {
+                        const socketTest = await fetch(`${apiUrl}/socket.io/?EIO=4&transport=polling`, {
+                            method: 'GET'
+                        });
+                        if (socketTest.status === 200 || socketTest.status === 400) {
+                            log('✅ Socket endpoint is accessible!', 'success');
+                        } else {
+                            log(`⚠️ Socket endpoint returned status: ${socketTest.status}`, 'warning');
+                        }
+                    } catch (socketError) {
+                        log('⚠️ Could not test socket endpoint: ' + socketError.message, 'warning');
+                    }
+                    
+                    showStatus('loginStatus', 'Server is reachable. You can proceed with login.', 'success');
+                } else {
+                    log(`⚠️ Server responded with status: ${response.status}`, 'warning');
+                    showStatus('loginStatus', `Server responded (Status: ${response.status})`, 'info');
+                }
+            } catch (error) {
+                log('❌ Cannot reach server: ' + error.message, 'error');
+                log('💡 Make sure:', 'warning');
+                log('   1. Server is running', 'warning');
+                log('   2. Server URL is correct (e.g., http://localhost:5000)', 'warning');
+                log('   3. No trailing slash in URL', 'warning');
+                log('   4. CORS is enabled on server', 'warning');
+                showStatus('loginStatus', 'Cannot reach server. Check logs.', 'error');
+            }
+        }
+
+        // Login Function
+        async function handleLogin() {
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value.trim();
+            apiUrl = document.getElementById('serverUrl').value.trim();
+
+            if (!apiUrl) {
+                showStatus('loginStatus', 'Please enter server URL', 'error');
+                log('❌ Server URL is required', 'error');
+                return;
+            }
+
+            if (!email || !password) {
+                showStatus('loginStatus', 'Please enter email and password', 'error');
+                log('❌ Email and password are required', 'error');
+                return;
+            }
+
+            try {
+                log('🔐 Attempting login...', 'info');
+                log(`📡 Server URL: ${apiUrl}`, 'info');
+                log(`📧 Email: ${email}`, 'info');
+                showStatus('loginStatus', 'Logging in...', 'info');
+
+                const response = await fetch(`${apiUrl}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                // Check if response is actually JSON
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    log(`❌ Server returned non-JSON response (Status: ${response.status})`, 'error');
+                    log(`Response: ${text.substring(0, 200)}...`, 'error');
+                    showStatus('loginStatus', `Server error (${response.status}). Check server URL and logs.`, 'error');
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.status === 1 && data.data && data.data.token) {
+                    token = data.data.token;
+                    log('✅ Login successful! Token received.', 'success');
+                    showStatus('loginStatus', 'Login successful!', 'success');
+                    
+                    // Show socket section
+                    document.getElementById('socketSection').style.display = 'block';
+                    document.getElementById('loginBtn').disabled = true;
+                    
+                    // Auto-connect socket after login
+                    setTimeout(() => {
+                        log('🔌 Auto-connecting socket...', 'info');
+                        connectSocket();
+                    }, 500);
+                } else {
+                    log('❌ Login failed: ' + (data.message || 'Invalid credentials'), 'error');
+                    showStatus('loginStatus', data.message || 'Login failed', 'error');
+                }
+            } catch (error) {
+                log('❌ Login error: ' + error.message, 'error');
+                if (error.message.includes('JSON')) {
+                    log('💡 Tip: Check if server URL is correct and server is running', 'warning');
+                    log('💡 Make sure URL format is: http://localhost:5000 (no trailing slash)', 'warning');
+                }
+                showStatus('loginStatus', 'Login error: ' + error.message, 'error');
+            }
+        }
+
+        // Connect Socket
+        function connectSocket() {
             if (!token) {
-                alert('Please enter JWT token');
+                log('❌ Please login first', 'error');
+                showStatus('socketStatus', 'Please login first', 'error');
                 return;
             }
 
             if (socket && socket.connected) {
-                log('Already connected!', 'warning');
+                log('⚠️ Socket already connected', 'warning');
                 return;
             }
 
-            log(`🔌 Connecting to ${serverUrl}...`, 'info');
-            updateStatus('connecting', 'Connecting...');
+            // Remove trailing slash from URL
+            apiUrl = apiUrl.replace(/\/$/, '');
+            
+            log(`🔌 Connecting to ${apiUrl}...`, 'info');
+            log(`📡 Using default Socket.IO path: /socket.io`, 'info');
+            showStatus('socketStatus', 'Connecting...', 'info');
             
             document.getElementById('connectBtn').disabled = true;
             document.getElementById('disconnectBtn').disabled = false;
 
             try {
-                socket = io(serverUrl, {
+                log(`🔌 Connecting to: ${apiUrl}`, 'info');
+                log(`📡 Using default Socket.IO path: /socket.io`, 'info');
+                log(`🔑 Using token: ${token.substring(0, 20)}...`, 'info');
+                
+                socket = io(apiUrl, {
                     auth: { token: token },
                     transports: ['websocket', 'polling'],
-                    path: '/ws/socket.io',
                     reconnection: true,
                     reconnectionDelay: 1000,
-                    reconnectionAttempts: 5
+                    reconnectionAttempts: 5,
+                    timeout: 20000,
+                    forceNew: true
                 });
 
                 socket.on('connect', () => {
-                    log('✅ Connected successfully!', 'success');
+                    log('✅ Socket connected successfully!', 'success');
                     log(`Socket ID: ${socket.id}`, 'info');
-                    updateStatus('connected', `Connected (ID: ${socket.id})`);
+                    log(`Transport: ${socket.io.engine.transport.name}`, 'info');
+                    showStatus('socketStatus', `Connected (ID: ${socket.id})`, 'success');
+                    
+                    // Show create room and join room sections
+                    document.getElementById('createRoomSection').style.display = 'block';
+                    document.getElementById('joinRoomSection').style.display = 'block';
                 });
 
                 socket.on('disconnect', (reason) => {
-                    log(`❌ Disconnected: ${reason}`, 'error');
-                    updateStatus('disconnected', 'Disconnected');
+                    log(`❌ Socket disconnected: ${reason}`, 'error');
+                    showStatus('socketStatus', 'Disconnected', 'disconnected');
                     document.getElementById('connectBtn').disabled = false;
                     document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('createRoomSection').style.display = 'none';
+                    document.getElementById('joinRoomSection').style.display = 'none';
                 });
 
                 socket.on('connect_error', (error) => {
                     log(`❌ Connection error: ${error.message}`, 'error');
-                    updateStatus('disconnected', `Error: ${error.message}`);
+                    log(`Error type: ${error.type || 'unknown'}`, 'error');
+                    log(`Error details: ${JSON.stringify(error)}`, 'error');
+                    
+                    // More detailed error messages
+                    if (error.message.includes('websocket')) {
+                        log('💡 WebSocket connection failed. Trying polling fallback...', 'warning');
+                        log('💡 Make sure:', 'warning');
+                        log('   1. Server is running and socket path is correct', 'warning');
+                        log('   2. CORS is properly configured', 'warning');
+                        log('   3. Firewall/proxy is not blocking WebSocket', 'warning');
+                    } else if (error.message.includes('timeout')) {
+                        log('💡 Connection timeout. Server might be slow or unreachable.', 'warning');
+                    } else if (error.message.includes('Authentication')) {
+                        log('💡 Authentication failed. Check if token is valid.', 'warning');
+                    }
+                    
+                    showStatus('socketStatus', `Error: ${error.message}`, 'error');
                     document.getElementById('connectBtn').disabled = false;
                     document.getElementById('disconnectBtn').disabled = true;
                 });
@@ -233,56 +501,240 @@
                     log(`❌ Socket error: ${JSON.stringify(error)}`, 'error');
                 });
 
-                // Listen for game events
+                // Game Events Listeners
                 socket.on('player:joined', (data) => {
-                    log(`👤 Player joined: ${JSON.stringify(data)}`, 'info');
+                    log(`👤 👤 👤 PLAYER JOINED EVENT RECEIVED! 👤 👤 👤`, 'success');
+                    log(`New Player: ${data.player?.username || 'Unknown'}`, 'success');
+                    log(`Total Players in Room: ${data.players?.length || 0}`, 'info');
+                    log(`Full Data: ${JSON.stringify(data, null, 2)}`, 'info');
+                    log(`════════════════════════════════════════════════`, 'info');
                 });
 
                 socket.on('player:left', (data) => {
-                    log(`👋 Player left: ${JSON.stringify(data)}`, 'info');
+                    log(`👋 Player left: ${JSON.stringify(data, null, 2)}`, 'warning');
+                });
+
+                socket.on('player:ready', (data) => {
+                    log(`✅ Player ready: ${JSON.stringify(data, null, 2)}`, 'info');
                 });
 
                 socket.on('game:started', (data) => {
-                    log(`🎮 Game started: ${JSON.stringify(data)}`, 'success');
+                    log(`🎮 Game started: ${JSON.stringify(data, null, 2)}`, 'success');
+                });
+
+                socket.on('question:new', (data) => {
+                    log(`❓ New question: ${JSON.stringify(data, null, 2)}`, 'info');
                 });
 
                 socket.on('question:answered', (data) => {
-                    log(`✅ Answer submitted: ${JSON.stringify(data)}`, 'info');
+                    log(`✅ Answer submitted: ${JSON.stringify(data, null, 2)}`, 'info');
                 });
 
                 socket.on('error:general', (data) => {
-                    log(`⚠️ General error: ${JSON.stringify(data)}`, 'error');
+                    log(`⚠️ General error: ${JSON.stringify(data, null, 2)}`, 'error');
                 });
 
                 socket.on('error:game', (data) => {
-                    log(`⚠️ Game error: ${JSON.stringify(data)}`, 'error');
+                    log(`⚠️ Game error: ${JSON.stringify(data, null, 2)}`, 'error');
                 });
 
             } catch (error) {
                 log(`❌ Failed to create socket: ${error.message}`, 'error');
-                updateStatus('disconnected', `Error: ${error.message}`);
+                showStatus('socketStatus', `Error: ${error.message}`, 'error');
                 document.getElementById('connectBtn').disabled = false;
                 document.getElementById('disconnectBtn').disabled = true;
             }
         }
 
+        // Disconnect Socket
         function disconnectSocket() {
             if (socket) {
                 log('🔌 Disconnecting...', 'info');
                 socket.disconnect();
                 socket = null;
-                updateStatus('disconnected', 'Disconnected');
+                showStatus('socketStatus', 'Disconnected', 'disconnected');
                 document.getElementById('connectBtn').disabled = false;
                 document.getElementById('disconnectBtn').disabled = true;
+                document.getElementById('joinRoomSection').style.display = 'none';
             }
         }
 
-        // Auto-clear logs on page load
+        // Create Room
+        async function createRoom() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected. Please connect socket first!', 'error');
+                showStatus('createRoomStatus', 'Socket not connected', 'error');
+                return;
+            }
+
+            const numberOfQuestions = parseInt(document.getElementById('numberOfQuestions').value) || 10;
+            const maximumPlayers = parseInt(document.getElementById('maximumPlayers').value) || 4;
+
+            // Collect categories
+            const categories = {
+                quran: {
+                    enabled: document.getElementById('catQuran').checked,
+                    difficulty: 'medium'
+                },
+                hadith: {
+                    enabled: document.getElementById('catHadith').checked,
+                    difficulty: 'medium'
+                },
+                history: {
+                    enabled: document.getElementById('catHistory').checked,
+                    difficulty: 'medium'
+                },
+                fiqh: {
+                    enabled: document.getElementById('catFiqh').checked,
+                    difficulty: 'medium'
+                }
+            };
+
+            // Check if at least one category is enabled
+            const enabledCategories = Object.values(categories).filter(cat => cat.enabled);
+            if (enabledCategories.length === 0) {
+                log('❌ At least one category must be enabled', 'error');
+                showStatus('createRoomStatus', 'Please enable at least one category', 'error');
+                return;
+            }
+
+            try {
+                log('🎮 Creating room via HTTP API...', 'info');
+                showStatus('createRoomStatus', 'Creating room...', 'info');
+
+                // HTTP API: Create room
+                const response = await fetch(`${apiUrl}/api/game/create`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        categories,
+                        numberOfQuestions,
+                        maximumPlayers
+                    })
+                });
+
+                // Check if response is actually JSON
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    log(`❌ Server returned non-JSON response (Status: ${response.status})`, 'error');
+                    log(`Response: ${text.substring(0, 200)}...`, 'error');
+                    showStatus('createRoomStatus', `Server error (${response.status})`, 'error');
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.status === 1) {
+                    const roomCode = data.data.roomCode;
+                    log('✅ Room created successfully via HTTP API!', 'success');
+                    log(`Room Code: ${roomCode}`, 'success');
+                    log(`Total Questions: ${data.data.settings?.numberOfQuestions || numberOfQuestions}`, 'info');
+                    log(`Max Players: ${data.data.settings?.maximumPlayers || maximumPlayers}`, 'info');
+                    showStatus('createRoomStatus', `Room created: ${roomCode}`, 'success');
+
+                    // Set room code in join room input
+                    document.getElementById('roomCode').value = roomCode;
+
+                    // Socket join is now handled by joinGame API
+                    log('✅ Socket room join handled by API automatically', 'success');
+                    log('🎉 You are now the host and will receive all player events!', 'success');
+                    log('📡 Listening for: player:joined, player:left, player:ready, game:started', 'info');
+                } else {
+                    log('❌ Failed to create room: ' + data.message, 'error');
+                    showStatus('createRoomStatus', data.message, 'error');
+                }
+            } catch (error) {
+                log('❌ Create room error: ' + error.message, 'error');
+                if (error.message.includes('JSON')) {
+                    log('💡 Tip: Check if server is running and URL is correct', 'warning');
+                }
+                showStatus('createRoomStatus', 'Error: ' + error.message, 'error');
+            }
+        }
+
+        // Join Room
+        async function joinRoom() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected. Please connect socket first!', 'error');
+                showStatus('joinRoomStatus', 'Socket not connected', 'error');
+                return;
+            }
+
+            const roomCode = document.getElementById('roomCode').value.trim().toUpperCase();
+            if (!roomCode) {
+                showStatus('joinRoomStatus', 'Please enter room code', 'error');
+                log('❌ Room code is required', 'error');
+                return;
+            }
+
+            try {
+                log(`🚪 Joining room: ${roomCode}...`, 'info');
+                showStatus('joinRoomStatus', 'Joining room...', 'info');
+
+                // HTTP API: Join room
+                const response = await fetch(`${apiUrl}/api/game/join`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ roomCode: roomCode })
+                });
+
+                // Check if response is actually JSON
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    log(`❌ Server returned non-JSON response (Status: ${response.status})`, 'error');
+                    log(`Response: ${text.substring(0, 200)}...`, 'error');
+                    showStatus('joinRoomStatus', `Server error (${response.status})`, 'error');
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.status === 1) {
+                    log('✅ Joined room successfully via HTTP API!', 'success');
+                    log(`Room Code: ${roomCode}`, 'info');
+                    log(`Total Players: ${data.data.players?.length || 0}`, 'info');
+                    log(`Room Status: ${data.data.status || 'unknown'}`, 'info');
+                    showStatus('joinRoomStatus', `Joined room: ${roomCode}`, 'success');
+
+                    // Socket join is now handled by joinGame API automatically
+                    log('✅ Socket room join handled by API automatically', 'success');
+                    log('🎉 You are now in the room and will receive all events!', 'success');
+                    log('📡 Listening for: player:joined, player:left, player:ready, game:started', 'info');
+                } else {
+                    log('❌ Failed to join room: ' + data.message, 'error');
+                    showStatus('joinRoomStatus', data.message, 'error');
+                }
+            } catch (error) {
+                log('❌ Join room error: ' + error.message, 'error');
+                if (error.message.includes('JSON')) {
+                    log('💡 Tip: Check if server is running and URL is correct', 'warning');
+                }
+                showStatus('joinRoomStatus', 'Error: ' + error.message, 'error');
+            }
+        }
+
+        // Initialize
         window.onload = function() {
-            log('Socket.IO Test Client Ready', 'info');
-            log('Enter your server URL and JWT token, then click Connect', 'info');
+            log('════════════════════════════════════════════════', 'info');
+            log('🔌 Socket Test Client Ready', 'info');
+            log('════════════════════════════════════════════════', 'info');
+            log('📋 Steps:', 'info');
+            log('   1. Enter server URL, email, password → Login', 'info');
+            log('   2. Socket will auto-connect after login', 'info');
+            log('   3a. Create Room (as Host) OR 3b. Join Room (as Player)', 'info');
+            log('   4. You will receive "player:joined" events when others join', 'info');
+            log('════════════════════════════════════════════════', 'info');
         };
     </script>
 </body>
 </html>
-

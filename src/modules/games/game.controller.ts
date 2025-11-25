@@ -10,6 +10,7 @@ import { Question } from './models/question.model';
 import { generateUniqueRoomCode } from './utils/generateRoomCode';
 import { IUser } from '../users/user.model';
 import { logger } from '../../utils/logger';
+import { bufferManager } from './utils/bufferManager';
 
 /**
  * Clean up game object before sending in response
@@ -242,6 +243,24 @@ const createGame = async (req: IGameRequest, res: Response) => {
 
       const saved = await newRoom.save();
       
+      // Socket join for host
+      const io = (req as any).app?.get('io');
+      if (io && req.user) {
+        const userId = req.user._id.toString();
+        const allSockets = await io.fetchSockets();
+        const userSocket = allSockets.find((socket: any) => {
+          const socketUserId = socket.data?.user?.id || socket.data?.user?._id?.toString();
+          return socketUserId === userId;
+        });
+
+        if (userSocket) {
+          await userSocket.join(roomCode);
+          userSocket.data.roomCode = roomCode;
+          userSocket.data.playerId = userId;
+          logger.info('✅ Host socket joined room via API', { userId, roomCode });
+        }
+      }
+      
       const populatedGame = await GameRoom.findById(saved._id)
         .populate({
           path: 'players.userId',
@@ -297,7 +316,25 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
 
       const io = (req as any).app?.get('io');
       if (io) {
-        io.to(roomCode).emit('player:joined', {
+        // Method 3: Find socket by userId (Direct userId se find)
+        const allSockets = await io.fetchSockets();
+        const userSocket = allSockets.find((socket: any) => {
+          const socketUserId = socket.data?.user?.id || socket.data?.user?._id?.toString();
+          return socketUserId === userId.toString();
+        });
+
+        // Join socket to room if connected
+        if (userSocket) {
+          await userSocket.join(roomCode);
+          userSocket.data.roomCode = roomCode;
+          userSocket.data.playerId = userId.toString();
+          logger.info('✅ Socket joined room via API', { userId: userId.toString(), roomCode });
+        } else {
+          logger.warn('⚠️ Socket not connected for user', { userId: userId.toString() });
+        }
+
+        // Prepare player joined data
+        const playerJoinedData = {
           player: {
             id: userId.toString(),
             userId: userId.toString(),
@@ -312,9 +349,42 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
             username: p.username,
             avatar: p.avatar,
             score: p.score || 0,
-            isHost: p.isHost
+            isHost: p.isHost || false
           }))
-        });
+        };
+
+        // Get all receivers (except sender) - Buffer logic
+        const socketsInRoom = await io.in(roomCode).fetchSockets();
+        const receiverIds = socketsInRoom
+          .filter((s: any) => s.data?.user?.id && s.data.user.id !== userId.toString())
+          .map((s: any) => s.data.user.id);
+
+        // Create buffer if there are receivers
+        if (receiverIds.length > 0) {
+          const taskId = await bufferManager.createBuffer(
+            roomCode,
+            userId.toString(),
+            'player:joined',
+            playerJoinedData,
+            receiverIds
+          );
+
+          // Broadcast with taskId
+          io.to(roomCode).emit('player:joined', {
+            ...playerJoinedData,
+            taskId,
+            senderId: userId.toString()
+          } as any);
+
+          logger.info('📤 Player joined event sent with buffer', { 
+            taskId, 
+            roomCode, 
+            receiverCount: receiverIds.length 
+          });
+        } else {
+          // No receivers, normal emit
+          io.to(roomCode).emit('player:joined', playerJoinedData);
+        }
       }
 
       // Populate players for response
