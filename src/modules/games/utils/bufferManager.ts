@@ -29,7 +29,17 @@ class BufferManager {
     payload: any,
     receiverIds: string[]
   ): Promise<string> {
+    console.log('═══════════════════════════════════════════════════════════');
+    console.log('📦 [BUFFER CREATE] Starting buffer creation...');
+    console.log('═══════════════════════════════════════════════════════════');
+    console.log('🏠 Room Code:', roomCode);
+    console.log('👤 Sender ID:', senderId);
+    console.log('📡 Event Name:', eventName);
+    console.log('👥 Receiver IDs:', receiverIds);
+    console.log('📊 Receiver Count:', receiverIds.length);
+    
     const taskId = uuidv4();
+    console.log('🆔 Generated TaskId:', taskId);
     
     const bufferEntry: BufferEntry = {
       taskId,
@@ -42,6 +52,7 @@ class BufferManager {
       createdAt: new Date()
     };
     this.buffers.set(taskId, bufferEntry);
+    console.log('✅ [BUFFER] Buffer entry added to memory');
 
     try {
       await MessageBuffer.create({
@@ -54,11 +65,16 @@ class BufferManager {
         acknowledgedBy: [],
         status: 'pending'
       });
+      console.log('✅ [BUFFER] Buffer saved to database');
       logger.info('✅ Buffer created', { taskId, roomCode });
     } catch (error) {
+      console.error('❌ [BUFFER] Error saving to database:', error);
       logger.error('Error creating buffer in DB', { error, taskId });
     }
 
+    console.log('✅ [BUFFER CREATE] Buffer creation completed!');
+    console.log('📋 TaskId to return:', taskId);
+    console.log('═══════════════════════════════════════════════════════════');
     return taskId;
   }
 

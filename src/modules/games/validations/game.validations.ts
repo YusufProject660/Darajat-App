@@ -2,7 +2,7 @@ import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { body, validationResult, ValidationChain } from 'express-validator';
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
-const CATEGORIES = ['quran', 'hadith', 'history', 'fiqh', 'seerah'] as const;
+const CATEGORIES = ['prophets', 'fiqh'] as const;
 
 type Difficulty = typeof DIFFICULTIES[number];
 type Category = typeof CATEGORIES[number];

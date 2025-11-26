@@ -4,6 +4,7 @@ import { Types } from 'mongoose';
 import { config } from '../../config/env';
 import User from '../users/user.model';
 import { gameService } from './services/game.service';
+import { GameRoom } from './models/gameRoom.model';
 import { ClientEvents, InterServerEvents, ServerEvents, SocketData } from './types/game.types';
 import { logger } from '../../utils/logger';
 import { bufferManager } from './utils/bufferManager';
@@ -272,13 +273,23 @@ async function handleJoinRoom(
       });
       
       // Notify other players in the room with buffer tracking
-      console.log('📢 Broadcasting player:joined event to other players in room:', roomCode);
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log('📢 [SOCKET HANDLER] Broadcasting player:joined event...');
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log('🏠 Room Code:', roomCode);
+      console.log('👤 User ID:', userId);
+      console.log('👤 Username:', username);
       
       // Get all receivers (except sender)
       const socketsInRoom = await io.in(roomCode).fetchSockets();
+      console.log('📊 Total Sockets in Room:', socketsInRoom.length);
+      
       const receiverIds = socketsInRoom
         .filter(s => s.data?.user?.id && s.data.user.id !== userId)
         .map(s => s.data.user.id);
+
+      console.log('👥 [RECEIVERS] Receiver IDs:', receiverIds);
+      console.log('📊 [RECEIVERS] Receiver Count:', receiverIds.length);
 
       const playerJoinedData = {
         player: {
@@ -299,8 +310,15 @@ async function handleJoinRoom(
         }))
       };
 
+      console.log('📦 [DATA] Player joined data prepared:', {
+        player: playerJoinedData.player,
+        totalPlayers: playerJoinedData.players.length
+      });
+
       // Create buffer if there are receivers
       if (receiverIds.length > 0) {
+        console.log('📦 [BUFFER] Creating buffer for', receiverIds.length, 'receivers...');
+        
         const taskId = await bufferManager.createBuffer(
           roomCode,
           userId,
@@ -309,13 +327,21 @@ async function handleJoinRoom(
           receiverIds
         );
 
+        console.log('✅ [BUFFER] Buffer created with taskId:', taskId);
+
         // Broadcast with taskId
+        console.log('📤 [EMIT] Broadcasting player:joined event with buffer...');
+        console.log('📋 [EMIT] TaskId:', taskId);
+        console.log('📋 [EMIT] Sender ID:', userId);
+        console.log('📋 [EMIT] Receivers:', receiverIds);
+        
         socket.to(roomCode).emit('player:joined', {
           ...playerJoinedData,
           taskId,
           senderId: userId
         } as any);
 
+        console.log('✅ [EMIT] player:joined event sent with buffer!');
         logger.info('📤 Player joined event sent with buffer', { 
           taskId, 
           roomCode, 
@@ -323,10 +349,13 @@ async function handleJoinRoom(
         });
       } else {
         // No receivers, normal emit (existing flow)
+        console.log('📤 [EMIT] No receivers found - sending normal emit (no buffer)');
         socket.to(roomCode).emit('player:joined', playerJoinedData);
+        console.log('✅ [EMIT] player:joined event sent (no buffer tracking)');
       }
       
-      console.log('✅ Event broadcasted to', receiverIds.length || room.players?.length - 1 || 0, 'other players');
+      console.log('✅ [SOCKET HANDLER] Event broadcasted to', receiverIds.length || room.players?.length - 1 || 0, 'other players');
+      console.log('═══════════════════════════════════════════════════════════');
       
       // Successfully joined the room - Convert to serializable object
       const serializableRoom = {
@@ -439,6 +468,305 @@ async function handleSubmitAnswer(
 }
 
 /**
+ * Handle player leaving room
+ */
+async function handleLeaveRoom(
+  io: SocketIOServer,
+  socket: Socket<ClientEvents, ServerEvents, InterServerEvents, SocketData>,
+  data?: { roomCode?: string },
+  callback?: (response: { success: boolean; error?: string }) => void
+) {
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log('🚪 [LEAVE ROOM] Event received');
+  console.log('═══════════════════════════════════════════════════════════');
+  
+  try {
+    const socketData = socket.data;
+    if (!socketData || !socketData.user) {
+      console.log('❌ [ERROR] Socket not authenticated');
+      return callback?.({ success: false, error: 'Socket not authenticated' });
+    }
+
+    const userId = socketData.user.id;
+    const roomCode = data?.roomCode || socketData.roomCode;
+
+    console.log('👤 User ID:', userId);
+    console.log('👤 Username:', socketData.user.username);
+    console.log('🏠 Room Code:', roomCode);
+
+    if (!roomCode) {
+      console.log('❌ [ERROR] Room code not found');
+      return callback?.({ success: false, error: 'Room code not found' });
+    }
+
+    const session = await GameRoom.startSession();
+    session.startTransaction();
+
+    try {
+      const room = await GameRoom.findOne({ roomCode }).session(session);
+      if (!room) {
+        await session.abortTransaction();
+        console.log('❌ [ERROR] Room not found:', roomCode);
+        return callback?.({ success: false, error: 'Room not found' });
+      }
+
+      const player = room.players.find((p: any) => p.userId.toString() === userId);
+      if (!player) {
+        await session.abortTransaction();
+        console.log('❌ [ERROR] Player not in room');
+        return callback?.({ success: false, error: 'Player not in room' });
+      }
+
+      const wasHost = player.isHost;
+      let newHostId: string | undefined;
+
+      console.log('📋 Player Info:', {
+        userId: userId,
+        username: player.username,
+        isHost: wasHost,
+        totalPlayersBefore: room.players.length
+      });
+
+      room.players = room.players.filter((p: any) => p.userId.toString() !== userId);
+
+      console.log('📊 Players after removal:', room.players.length);
+
+      if (wasHost && room.players.length > 0) {
+        const newHost = room.players[0];
+        newHost.isHost = true;
+        newHostId = newHost.userId.toString();
+        room.hostId = new Types.ObjectId(newHostId);
+        console.log('👑 [HOST CHANGE] New host assigned:', newHostId);
+        console.log('👑 [HOST CHANGE] New host username:', newHost.username);
+      } else if (room.players.length === 0) {
+        room.status = 'finished';
+        room.finishedAt = new Date();
+        console.log('🏁 [GAME FINISHED] No players left, game finished');
+      }
+
+      await room.save({ session });
+      await session.commitTransaction();
+      console.log('✅ [DB] Room updated successfully');
+
+      await socket.leave(roomCode);
+      socket.data.roomCode = '';
+      console.log('🔌 [SOCKET] Socket left room:', roomCode);
+
+      if (room.players.length === 0) {
+        console.log('🧹 [CLEANUP] Cleaning up empty room...');
+        await gameService.cleanupRoom(roomCode);
+        console.log('✅ [CLEANUP] Room cleaned up');
+        return callback?.({ success: true });
+      }
+
+      const playersList = room.players.map((p: any) => ({
+        id: p.userId.toString(),
+        userId: p.userId.toString(),
+        username: p.username,
+        avatar: p.avatar,
+        score: p.score || 0,
+        isHost: p.isHost || false
+      }));
+
+      console.log('📤 [EMIT] Broadcasting player:removed event...');
+      console.log('📋 Event Data:', {
+        playerId: userId,
+        reason: 'left',
+        remainingPlayers: playersList.length,
+        newHostId: newHostId || 'None'
+      });
+
+      io.to(roomCode).emit('player:removed', {
+        playerId: userId,
+        reason: 'left',
+        players: playersList,
+        newHostId,
+        roomCode
+      } as any);
+
+      console.log('✅ [EMIT] player:removed event sent to', room.players.length, 'remaining players');
+      console.log('✅ [SUCCESS] Player left room successfully');
+      console.log('═══════════════════════════════════════════════════════════');
+
+      callback?.({ success: true });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  } catch (error: any) {
+    console.log('❌ [ERROR] Error in room:leave:', error.message);
+    console.log('═══════════════════════════════════════════════════════════');
+    logger.error('Error in room:leave', { error: error.message });
+    socket.emit('error:game', {
+      code: 'LEAVE_ERROR',
+      message: error.message || 'Failed to leave room',
+      recoverable: true
+    });
+    callback?.({ success: false, error: error.message || 'Failed to leave room' });
+  }
+}
+
+/**
+ * Handle host kicking a player
+ */
+async function handleKickPlayer(
+  io: SocketIOServer,
+  socket: Socket<ClientEvents, ServerEvents, InterServerEvents, SocketData>,
+  data: { roomCode: string; playerId: string },
+  callback?: (response: { success: boolean; error?: string }) => void
+) {
+  console.log('═══════════════════════════════════════════════════════════');
+  console.log('👢 [KICK PLAYER] Event received');
+  console.log('═══════════════════════════════════════════════════════════');
+  
+  try {
+    const socketData = socket.data;
+    if (!socketData || !socketData.user) {
+      console.log('❌ [ERROR] Socket not authenticated');
+      return callback?.({ success: false, error: 'Socket not authenticated' });
+    }
+
+    const currentUserId = socketData.user.id;
+    const { roomCode, playerId } = data;
+
+    console.log('👤 Host User ID:', currentUserId);
+    console.log('👤 Host Username:', socketData.user.username);
+    console.log('🎯 Target Player ID:', playerId);
+    console.log('🏠 Room Code:', roomCode);
+
+    if (!roomCode || !playerId) {
+      console.log('❌ [ERROR] Room code and player ID are required');
+      return callback?.({ success: false, error: 'Room code and player ID are required' });
+    }
+
+    const session = await GameRoom.startSession();
+    session.startTransaction();
+
+    try {
+      const room = await GameRoom.findOne({ roomCode }).session(session);
+      if (!room) {
+        await session.abortTransaction();
+        console.log('❌ [ERROR] Room not found:', roomCode);
+        return callback?.({ success: false, error: 'Room not found' });
+      }
+
+      const currentPlayer = room.players.find((p: any) => p.userId.toString() === currentUserId);
+      if (!currentPlayer || !currentPlayer.isHost) {
+        await session.abortTransaction();
+        console.log('❌ [ERROR] Only host can kick players');
+        console.log('📋 Current Player:', {
+          userId: currentUserId,
+          isHost: currentPlayer?.isHost || false
+        });
+        return callback?.({ success: false, error: 'Only host can kick players' });
+      }
+
+      const targetPlayer = room.players.find((p: any) => p.userId.toString() === playerId);
+      if (!targetPlayer) {
+        await session.abortTransaction();
+        console.log('❌ [ERROR] Player not found in room');
+        return callback?.({ success: false, error: 'Player not found in room' });
+      }
+
+      if (targetPlayer.isHost) {
+        await session.abortTransaction();
+        console.log('❌ [ERROR] Cannot kick the host');
+        return callback?.({ success: false, error: 'Cannot kick the host' });
+      }
+
+      console.log('📋 Target Player Info:', {
+        userId: playerId,
+        username: targetPlayer.username,
+        isHost: targetPlayer.isHost,
+        totalPlayersBefore: room.players.length
+      });
+
+      room.players = room.players.filter((p: any) => p.userId.toString() !== playerId);
+
+      console.log('📊 Players after kick:', room.players.length);
+
+      await room.save({ session });
+      await session.commitTransaction();
+      console.log('✅ [DB] Room updated successfully');
+
+      const socketsInRoom = await io.in(roomCode).fetchSockets();
+      const targetSocket = socketsInRoom.find(s => s.data?.user?.id === playerId);
+      
+      if (targetSocket) {
+        console.log('🔌 [SOCKET] Target socket found, removing from room...');
+        await targetSocket.leave(roomCode);
+        targetSocket.data.roomCode = '';
+        console.log('✅ [SOCKET] Target socket removed from room');
+        
+        console.log('📤 [EMIT] Sending player:removed to kicked player...');
+        targetSocket.emit('player:removed', {
+          playerId,
+          reason: 'kicked',
+          players: room.players.map((p: any) => ({
+            id: p.userId.toString(),
+            userId: p.userId.toString(),
+            username: p.username,
+            avatar: p.avatar,
+            score: p.score || 0,
+            isHost: p.isHost || false
+          })),
+          roomCode
+        } as any);
+        console.log('✅ [EMIT] player:removed sent to kicked player');
+      } else {
+        console.log('⚠️ [WARNING] Target socket not found (player may have disconnected)');
+      }
+
+      const playersList = room.players.map((p: any) => ({
+        id: p.userId.toString(),
+        userId: p.userId.toString(),
+        username: p.username,
+        avatar: p.avatar,
+        score: p.score || 0,
+        isHost: p.isHost || false
+      }));
+
+      console.log('📤 [EMIT] Broadcasting player:removed event to room...');
+      console.log('📋 Event Data:', {
+        playerId: playerId,
+        reason: 'kicked',
+        remainingPlayers: playersList.length
+      });
+
+      io.to(roomCode).emit('player:removed', {
+        playerId,
+        reason: 'kicked',
+        players: playersList,
+        roomCode
+      } as any);
+
+      console.log('✅ [EMIT] player:removed event sent to', room.players.length, 'remaining players');
+      console.log('✅ [SUCCESS] Player kicked successfully');
+      console.log('═══════════════════════════════════════════════════════════');
+
+      callback?.({ success: true });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  } catch (error: any) {
+    console.log('❌ [ERROR] Error in room:kick:', error.message);
+    console.log('═══════════════════════════════════════════════════════════');
+    logger.error('Error in room:kick', { error: error.message });
+    socket.emit('error:game', {
+      code: 'KICK_ERROR',
+      message: error.message || 'Failed to kick player',
+      recoverable: true
+    });
+    callback?.({ success: false, error: error.message || 'Failed to kick player' });
+  }
+}
+
+/**
  * Handle player disconnection
  */
 async function handleDisconnect(
@@ -534,6 +862,16 @@ export function setupSocketHandlers(io: SocketIOServer<ClientEvents, ServerEvent
     // Handle joining a room
     socket.on('room:join', async (data, callback) => {
       await handleJoinRoom(io, socket, data, callback);
+    });
+
+    // Handle leaving a room
+    socket.on('room:leave' as any, async (data?: { roomCode?: string }, callback?: (response: { success: boolean; error?: string }) => void) => {
+      await handleLeaveRoom(io, socket, data, callback);
+    });
+
+    // Handle kicking a player (host only)
+    socket.on('room:kick' as any, async (data: { roomCode: string; playerId: string }, callback?: (response: { success: boolean; error?: string }) => void) => {
+      await handleKickPlayer(io, socket, data, callback);
     });
 
     // Handle answer submission

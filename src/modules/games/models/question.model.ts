@@ -50,7 +50,7 @@ const questionSchema = new Schema<IQuestion>({
   category: {
     type: String,
     required: true,
-    enum: ['quran', 'hadith', 'history', 'fiqh', 'seerah'],
+    enum: ['prophets', 'fiqh'],
     index: true
   },
   createdAt: { type: Date, default: Date.now }

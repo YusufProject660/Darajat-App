@@ -16,7 +16,7 @@ const deckSchema = new Schema<IDeck>({
   category: { 
     type: String, 
     required: true,
-    enum: ['quran', 'hadith', 'history', 'fiqh', 'seerah']
+    enum: ['prophets', 'fiqh']
   },
   difficulty: {
     type: String,

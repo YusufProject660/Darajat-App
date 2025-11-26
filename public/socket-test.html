@@ -110,6 +110,36 @@
             color: #0c5460;
             border: 1px solid #bee5eb;
         }
+        .players-list {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        .player-item {
+            padding: 10px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-radius: 5px;
+            border-left: 3px solid #ddd;
+        }
+        .badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .badge.host {
+            background: #ffd700;
+            color: #333;
+        }
+        .badge.ready {
+            background: #4caf50;
+            color: white;
+        }
+        .hidden {
+            display: none;
+        }
         .status.disconnected {
             background: #f8d7da;
             color: #721c24;
@@ -160,6 +190,34 @@
         }
         .hidden {
             display: none;
+        }
+        .api-response-container {
+            background: #f8f9fa;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .api-response-container h3 {
+            margin: 0 0 10px 0;
+            color: #495057;
+            font-size: 16px;
+        }
+        .api-response-content {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .api-response-content.empty {
+            color: #6c757d;
+            font-style: italic;
         }
     </style>
 </head>
@@ -246,6 +304,27 @@
                 <div id="joinRoomStatus"></div>
             </div>
 
+            <!-- Lobby Section -->
+            <div class="section hidden" id="lobbySection">
+                <h2>👥 Lobby</h2>
+                <div id="roomInfo"></div>
+                <div id="playersList" class="players-list"></div>
+                <button onclick="toggleReady()" id="readyBtn" style="background: #2196f3;">Mark Ready</button>
+                <button onclick="startGame()" id="startBtn" style="background: #f44336; margin-top: 10px;" disabled>Start Game (Host Only)</button>
+                <button onclick="leaveRoom()" id="leaveBtn" style="background: #ff9800; margin-top: 10px;">Leave Room</button>
+                <div id="lobbyStatus"></div>
+            </div>
+
+            <!-- API Response Section -->
+            <div class="section">
+                <h2>📡 API Response</h2>
+                <button class="clear-btn" onclick="clearApiResponse()" style="margin-bottom: 10px;">Clear Response</button>
+                <div class="api-response-container">
+                    <h3>Last API Response:</h3>
+                    <div id="apiResponse" class="api-response-content empty">No API response yet...</div>
+                </div>
+            </div>
+
             <!-- Logs Section -->
             <div class="section">
                 <h2>📋 Logs</h2>
@@ -261,6 +340,9 @@
         let socket = null;
         let token = null;
         let apiUrl = 'http://localhost:5000';
+        let currentRoom = null;
+        let currentUser = null;
+        let isHost = false;
 
         function log(message, type = 'info') {
             const logsDiv = document.getElementById('logs');
@@ -275,6 +357,28 @@
         function clearLogs() {
             document.getElementById('logs').innerHTML = '';
             log('Logs cleared', 'info');
+        }
+
+        function displayApiResponse(response, endpoint = '') {
+            const responseDiv = document.getElementById('apiResponse');
+            if (!responseDiv) return;
+            
+            try {
+                const formatted = JSON.stringify(response, null, 2);
+                responseDiv.textContent = endpoint ? `[${endpoint}]\n${formatted}` : formatted;
+                responseDiv.classList.remove('empty');
+            } catch (error) {
+                responseDiv.textContent = `Error formatting response: ${error.message}`;
+                responseDiv.classList.remove('empty');
+            }
+        }
+
+        function clearApiResponse() {
+            const responseDiv = document.getElementById('apiResponse');
+            if (responseDiv) {
+                responseDiv.textContent = 'No API response yet...';
+                responseDiv.classList.add('empty');
+            }
         }
 
         function showStatus(elementId, message, type) {
@@ -387,9 +491,11 @@
                 }
 
                 const data = await response.json();
+                displayApiResponse(data, 'POST /api/auth/login');
 
                 if (data.status === 1 && data.data && data.data.token) {
                     token = data.data.token;
+                    currentUser = data.data.user || data.data;
                     log('✅ Login successful! Token received.', 'success');
                     showStatus('loginStatus', 'Login successful!', 'success');
                     
@@ -508,14 +614,43 @@
                     log(`Total Players in Room: ${data.players?.length || 0}`, 'info');
                     log(`Full Data: ${JSON.stringify(data, null, 2)}`, 'info');
                     log(`════════════════════════════════════════════════`, 'info');
+                    updateLobby();
                 });
 
                 socket.on('player:left', (data) => {
                     log(`👋 Player left: ${JSON.stringify(data, null, 2)}`, 'warning');
                 });
 
+                socket.on('player:removed', (data) => {
+                    log(`════════════════════════════════════════════════`, 'warning');
+                    log(`👋 PLAYER REMOVED (${data.reason})`, 'warning');
+                    log(`════════════════════════════════════════════════`, 'warning');
+                    log(`Player ID: ${data.playerId || 'Unknown'}`, 'warning');
+                    log(`Reason: ${data.reason || 'Unknown'}`, 'info');
+                    log(`Remaining Players: ${data.players?.length || 0}`, 'info');
+                    if (data.newHostId) {
+                        log(`👑 New Host Assigned: ${data.newHostId}`, 'success');
+                    }
+                    log(`Full Data: ${JSON.stringify(data, null, 2)}`, 'info');
+                    log(`════════════════════════════════════════════════`, 'info');
+                    
+                    // Check if current user was removed
+                    const currentUserId = currentUser?.user_id || currentUser?._id;
+                    if (data.playerId === currentUserId) {
+                        log('⚠️ You were removed from the room', 'error');
+                        document.getElementById('lobbySection').classList.add('hidden');
+                        document.getElementById('createRoomSection').style.display = 'block';
+                        document.getElementById('joinRoomSection').style.display = 'block';
+                        currentRoom = null;
+                        return;
+                    }
+                    
+                    updateLobby();
+                });
+
                 socket.on('player:ready', (data) => {
                     log(`✅ Player ready: ${JSON.stringify(data, null, 2)}`, 'info');
+                    updateLobby();
                 });
 
                 socket.on('game:started', (data) => {
@@ -628,9 +763,12 @@
                 }
 
                 const data = await response.json();
+                displayApiResponse(data, 'POST /api/game/create');
 
                 if (data.status === 1) {
                     const roomCode = data.data.roomCode;
+                    currentRoom = roomCode;
+                    isHost = true;
                     log('✅ Room created successfully via HTTP API!', 'success');
                     log(`Room Code: ${roomCode}`, 'success');
                     log(`Total Questions: ${data.data.settings?.numberOfQuestions || numberOfQuestions}`, 'info');
@@ -639,6 +777,12 @@
 
                     // Set room code in join room input
                     document.getElementById('roomCode').value = roomCode;
+
+                    // Show lobby section
+                    document.getElementById('lobbySection').classList.remove('hidden');
+                    document.getElementById('createRoomSection').style.display = 'none';
+                    document.getElementById('joinRoomSection').style.display = 'none';
+                    updateLobby();
 
                     // Socket join is now handled by joinGame API
                     log('✅ Socket room join handled by API automatically', 'success');
@@ -698,13 +842,22 @@
                 }
 
                 const data = await response.json();
+                displayApiResponse(data, 'POST /api/game/join');
 
                 if (data.status === 1) {
+                    currentRoom = roomCode;
+                    isHost = false;
                     log('✅ Joined room successfully via HTTP API!', 'success');
                     log(`Room Code: ${roomCode}`, 'info');
                     log(`Total Players: ${data.data.players?.length || 0}`, 'info');
                     log(`Room Status: ${data.data.status || 'unknown'}`, 'info');
                     showStatus('joinRoomStatus', `Joined room: ${roomCode}`, 'success');
+
+                    // Show lobby section
+                    document.getElementById('lobbySection').classList.remove('hidden');
+                    document.getElementById('createRoomSection').style.display = 'none';
+                    document.getElementById('joinRoomSection').style.display = 'none';
+                    updateLobby();
 
                     // Socket join is now handled by joinGame API automatically
                     log('✅ Socket room join handled by API automatically', 'success');
@@ -721,6 +874,199 @@
                 }
                 showStatus('joinRoomStatus', 'Error: ' + error.message, 'error');
             }
+        }
+
+        // Update Lobby
+        async function updateLobby() {
+            if (!currentRoom) return;
+
+            try {
+                const response = await fetch(`${apiUrl}/api/game/lobby/${currentRoom}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                
+                if (data.status === 1) {
+                    const lobby = data.data;
+                    document.getElementById('roomInfo').innerHTML = `
+                        <p><strong>Room Code:</strong> ${lobby.roomCode}</p>
+                        <p><strong>Status:</strong> ${lobby.status}</p>
+                        <p><strong>Players:</strong> ${lobby.players?.length || 0} / ${lobby.settings?.maximumPlayers || 0}</p>
+                    `;
+
+                    let playersHtml = '<h4 style="margin-bottom: 10px; color: #333;">Players in Room:</h4>';
+                    const currentUserId = currentUser?.user_id || currentUser?._id;
+                    
+                    // Check if current user is host - use both isHost variable and lobby data
+                    const currentId = currentUserId?.toString();
+                    const isCurrentUserHost = isHost || (lobby.players || []).some(p => {
+                        const pid = (p.id || p.userId?._id || p.userId)?.toString();
+                        if (!pid || !currentId) return false;
+                        return pid === currentId && p.isHost;
+                    });
+                    
+                    // Debug log
+                    console.log('🔍 [DEBUG] Host Check:', {
+                        isHost: isHost,
+                        currentUserId: currentUserId,
+                        isCurrentUserHost: isCurrentUserHost,
+                        players: (lobby.players || []).map(p => ({
+                            userId: p.userId?._id || p.userId,
+                            username: p.username,
+                            isHost: p.isHost
+                        }))
+                    });
+                    
+                    (lobby.players || []).forEach((p, i) => {
+                        // Extract player ID - handle multiple formats (lobby API returns 'id' field)
+                        let pid = null;
+                        if (p.id) {
+                            pid = p.id;
+                        } else if (p.userId) {
+                            pid = p.userId._id || p.userId.id || p.userId;
+                        } else if (p._id) {
+                            pid = p._id;
+                        }
+                        const playerId = pid ? pid.toString() : null;
+                        
+                        // Extract current user ID for comparison
+                        const currentId = currentUserId?.toString();
+                        
+                        const isMe = (() => {
+                            if (!playerId || !currentId) return false;
+                            return playerId === currentId;
+                        })();
+                        const showKickButton = isCurrentUserHost && !isMe && !p.isHost && playerId;
+                        
+                        playersHtml += `
+                            <div class="player-item" style="padding: 10px; margin: 5px 0; background: ${isMe ? '#e3f2fd' : 'white'}; border-radius: 5px; border-left: 3px solid ${isMe ? '#4caf50' : '#ddd'};">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div>
+                                        <span style="font-weight: ${isMe ? 'bold' : 'normal'}; color: ${isMe ? '#1976d2' : '#333'};">
+                                            ${i + 1}. ${p.username} ${isMe ? '(You)' : ''}
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <span class="badge ${p.isHost ? 'host' : ''} ${p.isReady ? 'ready' : ''}">
+                                            ${p.isHost ? '👑 Host' : ''} ${p.isReady ? '✓ Ready' : '⏳ Not Ready'}
+                                        </span>
+                                        ${showKickButton ? `<button onclick="kickPlayer('${playerId}')" style="background: #f44336; color: white; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 12px;">Kick</button>` : ''}
+                                    </div>
+                                </div>
+                                ${p.score !== undefined ? `<div style="font-size: 0.85em; color: #666; margin-top: 5px;">Score: ${p.score}</div>` : ''}
+                            </div>
+                        `;
+                    });
+                    document.getElementById('playersList').innerHTML = playersHtml;
+
+                    // Enable start button if all ready and user is host
+                    const allReady = (lobby.players || []).every(p => p.isReady);
+                    const startBtn = document.getElementById('startBtn');
+                    if (startBtn) {
+                        startBtn.disabled = !allReady || lobby.status !== 'waiting' || !isCurrentUserHost;
+                        // Show/hide start button based on host status
+                        if (isCurrentUserHost) {
+                            startBtn.style.display = 'block';
+                        } else {
+                            startBtn.style.display = 'none';
+                        }
+                    }
+                }
+            } catch (error) {
+                log('❌ Error updating lobby: ' + error.message, 'error');
+            }
+        }
+
+        // Toggle Ready
+        async function toggleReady() {
+            if (!currentRoom) return;
+
+            try {
+                const response = await fetch(`${apiUrl}/api/game/${currentRoom}/ready`, {
+                    method: 'PATCH',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                if (data.status === 1) {
+                    log('✅ Ready status toggled', 'success');
+                    updateLobby();
+                }
+            } catch (error) {
+                log('❌ Error toggling ready: ' + error.message, 'error');
+            }
+        }
+
+        // Start Game
+        async function startGame() {
+            if (!currentRoom) return;
+
+            try {
+                log('🎮 Starting game...', 'info');
+                const response = await fetch(`${apiUrl}/api/game/${currentRoom}/start`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                if (data.status === 1) {
+                    log('✅ Game started!', 'success');
+                } else {
+                    log('❌ Failed to start: ' + data.message, 'error');
+                }
+            } catch (error) {
+                log('❌ Error starting game: ' + error.message, 'error');
+            }
+        }
+
+        // Leave Room
+        function leaveRoom() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
+            }
+            if (!currentRoom) {
+                log('❌ Not in any room', 'error');
+                return;
+            }
+
+            log('👋 Leaving room...', 'info');
+            socket.emit('room:leave', { roomCode: currentRoom }, (response) => {
+                if (response && response.success) {
+                    log('✅ Successfully left the room', 'success');
+                    currentRoom = null;
+                    isHost = false;
+                    document.getElementById('lobbySection').classList.add('hidden');
+                    document.getElementById('createRoomSection').style.display = 'block';
+                    document.getElementById('joinRoomSection').style.display = 'block';
+                } else {
+                    log('❌ Failed to leave: ' + (response?.error || 'Unknown error'), 'error');
+                }
+            });
+        }
+
+        // Kick Player (Host Only)
+        function kickPlayer(playerId) {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
+            }
+            if (!currentRoom) {
+                log('❌ Not in any room', 'error');
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to kick this player?`)) {
+                return;
+            }
+
+            log('👢 Kicking player: ' + playerId, 'info');
+            socket.emit('room:kick', { roomCode: currentRoom, playerId }, (response) => {
+                if (response && response.success) {
+                    log('✅ Player kicked successfully', 'success');
+                    updateLobby();
+                } else {
+                    log('❌ Failed to kick: ' + (response?.error || 'Unknown error'), 'error');
+                }
+            });
         }
 
         // Initialize

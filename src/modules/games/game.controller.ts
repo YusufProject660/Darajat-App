@@ -81,6 +81,19 @@ const cleanGameResponse = (game: any) => {
       return question;
     });
   }
+
+  // Remove 'enabled' field from categories (keep only difficulty)
+  if (cleanedGame.settings?.categories && typeof cleanedGame.settings.categories === 'object') {
+    const cleanedCategories: any = {};
+    for (const [category, config] of Object.entries(cleanedGame.settings.categories)) {
+      if (config && typeof config === 'object' && 'difficulty' in config) {
+        cleanedCategories[category] = {
+          difficulty: (config as any).difficulty
+        };
+      }
+    }
+    cleanedGame.settings.categories = cleanedCategories;
+  }
   
   return cleanedGame;
 };
@@ -305,7 +318,51 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
     const username = req.user.username;
     const avatar = req.user.avatar;
 
+    console.log('═══════════════════════════════════════════════════════════');
+    console.log('🎮 [JOIN GAME API] Starting player join process...');
+    console.log('═══════════════════════════════════════════════════════════');
+    console.log('👤 User ID:', userId.toString());
+    console.log('👤 Username:', username);
+    console.log('🏠 Room Code:', roomCode);
+
+    // ⭐ STEP 1: CHECK Socket.IO available hai ya nahi
+    const io = (req as any).app?.get('io');
+    console.log('🔌 Socket.IO Available:', !!io);
+    
+    if (!io) {
+      console.log('❌ [ERROR] Socket.IO not available!');
+      logger.error('Socket.IO not available for join game', { userId: userId.toString(), roomCode });
+      return res.apiError('Socket connection is required. Please connect to socket first.', 'SOCKET_NOT_CONNECTED');
+    }
+
+    // ⭐ STEP 2: CHECK User ka socket connected hai ya nahi
+    const allSockets = await io.fetchSockets();
+    console.log('📊 Total Connected Sockets:', allSockets.length);
+    
+    const userSocket = allSockets.find((socket: any) => {
+      const socketUserId = socket.data?.user?.id || socket.data?.user?._id?.toString();
+      return socketUserId === userId.toString();
+    });
+
+    // ⭐ CHECK: Agar socket connected nahi hai, to return kar do
+    if (!userSocket) {
+      console.log('❌ [ERROR] Socket not connected for user!');
+      console.log('💡 User needs to connect socket first');
+      logger.warn('⚠️ Socket not connected for user', { userId: userId.toString() });
+      return res.apiError('Socket connection is required. Please connect to socket first before joining the game.', 'SOCKET_NOT_CONNECTED');
+    }
+
+    console.log('✅ [SOCKET] User socket found! Socket connected.');
+    console.log('📋 Socket ID:', userSocket.id);
+    console.log('📋 Socket Data:', {
+      userId: userSocket.data?.user?.id,
+      username: userSocket.data?.user?.username,
+      roomCode: userSocket.data?.roomCode
+    });
+
     try {
+      // ⭐ STEP 3: DB ENTRY - Player ko room me add karo
+      console.log('💾 [DB] Adding player to room in database...');
       const updatedRoom = await gameService.joinRoom(roomCode.trim().toUpperCase(), {
         userId: userId as any,
         username,
@@ -313,86 +370,105 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
         isReady: false,
         score: 0
       });
+      console.log('✅ [DB] Player added to room successfully!');
+      console.log('📊 Total Players in Room:', updatedRoom.players?.length || 0);
 
-      const io = (req as any).app?.get('io');
-      if (io) {
-        // Method 3: Find socket by userId (Direct userId se find)
-        const allSockets = await io.fetchSockets();
-        const userSocket = allSockets.find((socket: any) => {
-          const socketUserId = socket.data?.user?.id || socket.data?.user?._id?.toString();
-          return socketUserId === userId.toString();
+      // ⭐ STEP 4: SOCKET JOIN ROOM - DB entry ke baad socket se room join karo
+      console.log('🔌 [SOCKET] Joining socket to room...');
+      await userSocket.join(roomCode);
+      userSocket.data.roomCode = roomCode;
+      userSocket.data.playerId = userId.toString();
+      
+      console.log('✅ [SOCKET] Socket joined room:', roomCode);
+      console.log('📋 Active Rooms:', Array.from(userSocket.rooms));
+      logger.info('✅ Socket joined room via API', { userId: userId.toString(), roomCode });
+
+      // Prepare player joined data
+      const playerJoinedData = {
+        player: {
+          id: userId.toString(),
+          userId: userId.toString(),
+          username: username,
+          avatar: avatar,
+          score: 0,
+          isHost: updatedRoom.hostId?.toString() === userId.toString()
+        },
+        players: updatedRoom.players.map((p: any) => ({
+          id: p.userId?.toString() || p.userId,
+          userId: p.userId?.toString() || p.userId,
+          username: p.username,
+          avatar: p.avatar,
+          score: p.score || 0,
+          isHost: p.isHost || false
+        }))
+      };
+
+      console.log('📦 [DATA] Player joined data prepared:', {
+        player: playerJoinedData.player,
+        totalPlayers: playerJoinedData.players.length
+      });
+
+      // Get all receivers (except sender) - Buffer logic
+      const socketsInRoom = await io.in(roomCode).fetchSockets();
+      console.log('👥 [RECEIVERS] Checking for receivers in room:', roomCode);
+      console.log('📊 Total Sockets in Room:', socketsInRoom.length);
+      
+      const receiverIds = socketsInRoom
+        .filter((s: any) => s.data?.user?.id && s.data.user.id !== userId.toString())
+        .map((s: any) => s.data.user.id);
+
+      console.log('📊 [RECEIVERS] Receiver IDs:', receiverIds);
+      console.log('📊 [RECEIVERS] Receiver Count:', receiverIds.length);
+
+      // Create buffer if there are receivers
+      if (receiverIds.length > 0) {
+        console.log('📦 [BUFFER] Creating buffer for', receiverIds.length, 'receivers...');
+        
+        const taskId = await bufferManager.createBuffer(
+          roomCode,
+          userId.toString(),
+          'player:joined',
+          playerJoinedData,
+          receiverIds
+        );
+
+        console.log('✅ [BUFFER] Buffer created with taskId:', taskId);
+
+        // Broadcast with taskId (joining player ko chod kar sab ko)
+        console.log('📤 [EMIT] Broadcasting player:joined event with buffer...');
+        console.log('📋 [EMIT] TaskId:', taskId);
+        console.log('📋 [EMIT] Sender ID:', userId.toString());
+        console.log('📋 [EMIT] Receivers:', receiverIds);
+        
+        // Joining player ko exclude karke sab ko event bhejo
+        userSocket.to(roomCode).emit('player:joined', {
+          ...playerJoinedData,
+          taskId,
+          senderId: userId.toString()
+        } as any);
+
+        console.log('✅ [EMIT] player:joined event sent with buffer!');
+        logger.info('📤 Player joined event sent with buffer', { 
+          taskId, 
+          roomCode, 
+          receiverCount: receiverIds.length 
         });
-
-        // Join socket to room if connected
-        if (userSocket) {
-          await userSocket.join(roomCode);
-          userSocket.data.roomCode = roomCode;
-          userSocket.data.playerId = userId.toString();
-          logger.info('✅ Socket joined room via API', { userId: userId.toString(), roomCode });
-        } else {
-          logger.warn('⚠️ Socket not connected for user', { userId: userId.toString() });
-        }
-
-        // Prepare player joined data
-        const playerJoinedData = {
-          player: {
-            id: userId.toString(),
-            userId: userId.toString(),
-            username: username,
-            avatar: avatar,
-            score: 0,
-            isHost: updatedRoom.hostId?.toString() === userId.toString()
-          },
-          players: updatedRoom.players.map((p: any) => ({
-            id: p.userId?.toString() || p.userId,
-            userId: p.userId?.toString() || p.userId,
-            username: p.username,
-            avatar: p.avatar,
-            score: p.score || 0,
-            isHost: p.isHost || false
-          }))
-        };
-
-        // Get all receivers (except sender) - Buffer logic
-        const socketsInRoom = await io.in(roomCode).fetchSockets();
-        const receiverIds = socketsInRoom
-          .filter((s: any) => s.data?.user?.id && s.data.user.id !== userId.toString())
-          .map((s: any) => s.data.user.id);
-
-        // Create buffer if there are receivers
-        if (receiverIds.length > 0) {
-          const taskId = await bufferManager.createBuffer(
-            roomCode,
-            userId.toString(),
-            'player:joined',
-            playerJoinedData,
-            receiverIds
-          );
-
-          // Broadcast with taskId
-          io.to(roomCode).emit('player:joined', {
-            ...playerJoinedData,
-            taskId,
-            senderId: userId.toString()
-          } as any);
-
-          logger.info('📤 Player joined event sent with buffer', { 
-            taskId, 
-            roomCode, 
-            receiverCount: receiverIds.length 
-          });
-        } else {
-          // No receivers, normal emit
-          io.to(roomCode).emit('player:joined', playerJoinedData);
-        }
+      } else {
+        // No receivers, normal emit (joining player ko chod kar)
+        console.log('📤 [EMIT] No receivers found - sending normal emit (no buffer)');
+        userSocket.to(roomCode).emit('player:joined', playerJoinedData);
+        console.log('✅ [EMIT] player:joined event sent (no buffer tracking)');
       }
+      
+      console.log('═══════════════════════════════════════════════════════════');
 
-      // Populate players for response
+      // Populate players and questions for response
       const populatedRoom = await GameRoom.findById(updatedRoom._id)
         .populate({
           path: 'players.userId',
           select: 'username avatar'
         })
+        .populate('questions')
         .lean() as any;
 
       // Format players with is_me field
@@ -417,11 +493,65 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
         };
       });
 
+      // Format questions same as create room (using cleanGameResponse logic)
+      let formattedQuestions: any[] = [];
+      if (Array.isArray(populatedRoom?.questions)) {
+        formattedQuestions = populatedRoom.questions.map((question: any) => {
+          if (!question._id) return question;
+          
+          const updatedQuestion: any = { ...question };
+          updatedQuestion.question_id = updatedQuestion._id?.toString() || updatedQuestion._id;
+          delete updatedQuestion._id;
+          
+          // Store original options array before formatting
+          const originalOptions = Array.isArray(updatedQuestion.options) 
+            ? [...updatedQuestion.options] 
+            : [];
+          
+          // Add option IDs to options array (same as create room)
+          if (Array.isArray(updatedQuestion.options)) {
+            updatedQuestion.options = updatedQuestion.options.map((option: string, index: number) => ({
+              option_id: index,
+              text: option
+            }));
+          }
+          
+          // Add correctAnswer with option_id and text (same as create room)
+          if (updatedQuestion.correctAnswer !== undefined && originalOptions.length > 0) {
+            const correctAnswerIndex = updatedQuestion.correctAnswer;
+            updatedQuestion.correctAnswer = {
+              option_id: correctAnswerIndex,
+              text: originalOptions[correctAnswerIndex] || ''
+            };
+          }
+          
+          // Remove deck and deckId fields (same as create room)
+          delete updatedQuestion.deck;
+          delete updatedQuestion.deckId;
+          
+          return updatedQuestion;
+        });
+      }
+
+      // Clean categories - remove 'enabled' field, keep only 'difficulty'
+      let cleanedCategories: any = {};
+      const rawCategories = populatedRoom?.settings?.categories || updatedRoom.settings?.categories;
+      if (rawCategories && typeof rawCategories === 'object') {
+        for (const [category, config] of Object.entries(rawCategories)) {
+          if (config && typeof config === 'object' && 'difficulty' in config) {
+            cleanedCategories[category] = {
+              difficulty: (config as any).difficulty
+            };
+          }
+        }
+      }
+
       return res.apiSuccess({
         roomCode: populatedRoom?.roomCode || updatedRoom.roomCode,
-        categories: populatedRoom?.settings?.categories || updatedRoom.settings?.categories,
+        categories: cleanedCategories,
         numberOfQuestions: populatedRoom?.settings?.numberOfQuestions || updatedRoom.settings?.numberOfQuestions,
         players: formattedPlayers,
+        questions: formattedQuestions,
         status: populatedRoom?.status || updatedRoom.status
       }, 'Game joined successfully');
     } catch (error: any) {

@@ -141,6 +141,34 @@
         .badge.host { background: #4caf50; color: white; }
         .badge.ready { background: #2196f3; color: white; }
         .full-width { grid-column: 1 / -1; }
+        .api-response-container {
+            background: #f8f9fa;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .api-response-container h3 {
+            margin: 0 0 10px 0;
+            color: #495057;
+            font-size: 16px;
+        }
+        .api-response-content {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .api-response-content.empty {
+            color: #6c757d;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -153,6 +181,11 @@
             <!-- Login Section -->
             <div class="section">
                 <h2>🔐 Step 1: Login</h2>
+                <div class="form-group">
+                    <label for="serverUrl">Server URL:</label>
+                    <input type="text" id="serverUrl" value="http://localhost:5000" placeholder="http://localhost:5000">
+                    <button onclick="testConnection()" style="margin-top: 5px; padding: 8px 15px; font-size: 14px; width: auto;">Test Connection</button>
+                </div>
                 <div class="form-group">
                     <label>Email:</label>
                     <input type="email" id="email" value="player2@test.com" placeholder="Enter email">
@@ -189,6 +222,7 @@
                 <div id="roomInfo"></div>
                 <div id="playersList" class="players-list"></div>
                 <button onclick="toggleReady()" id="readyBtn">Mark Ready</button>
+                <button onclick="leaveRoom()" id="leaveBtn" style="background: #ff9800; margin-top: 10px;">Leave Room</button>
                 <div id="lobbyStatus"></div>
             </div>
 
@@ -221,6 +255,16 @@
                 <div id="apiResponse" class="log-container" style="max-height: 200px; margin-top: 15px;"></div>
             </div>
 
+            <!-- API Response Section -->
+            <div class="section full-width">
+                <h2>📡 API Response</h2>
+                <button onclick="clearApiResponse()" style="background: #6c757d; margin-bottom: 15px;">Clear Response</button>
+                <div class="api-response-container">
+                    <h3>Last API Response:</h3>
+                    <div id="apiResponseDisplay" class="api-response-content empty">No API response yet...</div>
+                </div>
+            </div>
+
             <!-- Logs Section -->
             <div class="section full-width">
                 <h2>📝 Event Logs</h2>
@@ -231,17 +275,66 @@
     </div>
 
     <script>
-        const API_URL = 'http://localhost:5000';
-        const SOCKET_URL = 'http://localhost:5000';
+        let API_URL = 'http://localhost:5000';
+        let SOCKET_URL = 'http://localhost:5000';
         
         let token = '';
         let socket = null;
         let currentUser = null;
         let currentRoom = null;
+        let isHost = false;
         let currentQuestion = null;
         let currentQuestionIndex = 0;
         let timerInterval = null;
         let timeLeft = 0;
+
+        // Update API_URL from input field
+        function updateApiUrl() {
+            const serverUrlInput = document.getElementById('serverUrl');
+            if (serverUrlInput) {
+                API_URL = serverUrlInput.value.trim().replace(/\/$/, '') || 'http://localhost:5000';
+                SOCKET_URL = API_URL;
+            }
+        }
+
+        // Test Server Connection
+        async function testConnection() {
+            updateApiUrl();
+            
+            if (!API_URL) {
+                log('❌ Please enter server URL', 'error');
+                return;
+            }
+
+            try {
+                log(`🔍 Testing connection to ${API_URL}...`, 'info');
+                
+                const response = await fetch(`${API_URL}/health`, {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                }).catch(() => {
+                    return fetch(`${API_URL}/api/auth/login`, {
+                        method: 'OPTIONS',
+                        headers: { 'Accept': 'application/json' }
+                    });
+                });
+
+                if (response.ok || response.status === 404 || response.status === 405) {
+                    log('✅ Server is reachable!', 'success');
+                    showStatus('loginStatus', 'Server is reachable. You can proceed with login.', 'success');
+                } else {
+                    log(`⚠️ Server responded with status: ${response.status}`, 'warning');
+                    showStatus('loginStatus', `Server responded (Status: ${response.status})`, 'info');
+                }
+            } catch (error) {
+                log('❌ Cannot reach server: ' + error.message, 'error');
+                log('💡 Make sure:', 'warning');
+                log('   1. Server is running', 'warning');
+                log('   2. Server URL is correct (e.g., http://localhost:5000)', 'warning');
+                log('   3. No trailing slash in URL', 'warning');
+                showStatus('loginStatus', 'Cannot reach server. Check logs.', 'error');
+            }
+        }
 
         function log(message, type = 'info') {
             const logsContainer = document.getElementById('logs');
@@ -258,6 +351,27 @@
             log('Logs cleared', 'info');
         }
 
+        function displayApiResponse(response, endpoint = '') {
+            const responseDiv = document.getElementById('apiResponseDisplay');
+            if (!responseDiv) return;
+            try {
+                const formatted = JSON.stringify(response, null, 2);
+                responseDiv.textContent = endpoint ? `[${endpoint}]\n${formatted}` : formatted;
+                responseDiv.classList.remove('empty');
+            } catch (error) {
+                responseDiv.textContent = `Error: ${error.message}`;
+                responseDiv.classList.remove('empty');
+            }
+        }
+
+        function clearApiResponse() {
+            const responseDiv = document.getElementById('apiResponseDisplay');
+            if (responseDiv) {
+                responseDiv.textContent = 'No API response yet...';
+                responseDiv.classList.add('empty');
+            }
+        }
+
         function showStatus(elementId, message, type) {
             const element = document.getElementById(elementId);
             element.className = `status ${type}`;
@@ -266,11 +380,13 @@
 
         // Login
         async function login() {
+            updateApiUrl(); // Update API_URL from input field
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
 
             try {
                 log('Attempting login...', 'info');
+                log(`📡 Server URL: ${API_URL}`, 'info');
                 const response = await fetch(`${API_URL}/api/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -278,6 +394,7 @@
                 });
 
                 const data = await response.json();
+                displayApiResponse(data, 'POST /api/auth/login');
                 if (data.status === 1 && data.data && data.data.token) {
                     token = data.data.token;
                     currentUser = data.data;
@@ -341,6 +458,38 @@
                 updateLobby();
             });
 
+            socket.on('player:removed', (data) => {
+                log('════════════════════════════════════════════════', 'warning');
+                log(`👋 PLAYER REMOVED (${data.reason})`, 'warning');
+                log('════════════════════════════════════════════════', 'warning');
+                log('Player ID: ' + (data.playerId || 'Unknown'), 'warning');
+                log('Reason: ' + (data.reason || 'Unknown'), 'info');
+                log('Remaining Players: ' + (data.players?.length || 0), 'info');
+                
+                const currentUserId = currentUser?.user_id || currentUser?._id;
+                
+                if (data.newHostId) {
+                    log('👑 New Host Assigned: ' + data.newHostId, 'success');
+                    // Check if current user is the new host
+                    if (data.newHostId.toString() === currentUserId?.toString()) {
+                        isHost = true;
+                        log('🎉 You are now the host!', 'success');
+                    }
+                }
+                
+                // Check if current user was removed
+                if (data.playerId === currentUserId) {
+                    log('⚠️ You were removed from the room', 'error');
+                    document.getElementById('lobbySection').classList.add('hidden');
+                    document.getElementById('roomSection').classList.remove('hidden');
+                    currentRoom = null;
+                    isHost = false;
+                    return;
+                }
+                
+                updateLobby();
+            });
+
             socket.on('player:ready', (data) => {
                 log('✅ Player ready: ' + JSON.stringify(data), 'info');
                 updateLobby();
@@ -400,8 +549,10 @@
                 });
 
                 const data = await response.json();
+                displayApiResponse(data, 'POST /api/game/join');
                 if (data.status === 1) {
                     currentRoom = roomCode;
+                    isHost = false; // Set to false when joining (not creating)
                     log('✅ Joined room via API: ' + currentRoom, 'success');
                     showStatus('joinRoomStatus', 'Joined room: ' + currentRoom, 'success');
                     
@@ -436,14 +587,61 @@
                         <p><strong>Players:</strong> ${lobby.players?.length || 0} / ${lobby.settings?.maximumPlayers || 0}</p>
                     `;
 
-                    let playersHtml = '';
+                    let playersHtml = '<h4 style="margin-bottom: 10px; color: #333;">Players in Room:</h4>';
+                    const currentUserId = currentUser?.user_id || currentUser?._id;
+                    
+                    // Check if current user is host - use both isHost variable and lobby data
+                    const currentId = currentUserId?.toString();
+                    const isCurrentUserHost = isHost || (lobby.players || []).some(p => {
+                        const pid = (p.id || p.userId?._id || p.userId)?.toString();
+                        if (!pid || !currentId) return false;
+                        return pid === currentId && p.isHost;
+                    });
+                    
+                    // Debug log for host check
+                    console.log('🔍 [DEBUG] Host Check:', {
+                        isHost: isHost,
+                        currentUserId: currentUserId,
+                        isCurrentUserHost: isCurrentUserHost
+                    });
+                    
                     (lobby.players || []).forEach((p, i) => {
+                        // Extract player ID - handle multiple formats (lobby API returns 'id' field)
+                        let pid = null;
+                        if (p.id) {
+                            pid = p.id;
+                        } else if (p.userId) {
+                            pid = p.userId._id || p.userId.id || p.userId;
+                        } else if (p._id) {
+                            pid = p._id;
+                        }
+                        const playerId = pid ? pid.toString() : null;
+                        
+                        // Extract current user ID for comparison
+                        const currentId = currentUserId?.toString();
+                        
+                        const isMe = (() => {
+                            if (!playerId || !currentId) return false;
+                            return playerId === currentId;
+                        })();
+                        const showKickButton = isCurrentUserHost && !isMe && !p.isHost && playerId;
+                        
                         playersHtml += `
-                            <div class="player-item">
-                                <span>${i + 1}. ${p.username}</span>
-                                <span class="badge ${p.isHost ? 'host' : ''} ${p.isReady ? 'ready' : ''}">
-                                    ${p.isHost ? '👑 Host' : ''} ${p.isReady ? '✓ Ready' : 'Not Ready'}
-                                </span>
+                            <div class="player-item" style="padding: 10px; margin: 5px 0; background: ${isMe ? '#e3f2fd' : 'white'}; border-radius: 5px; border-left: 3px solid ${isMe ? '#2196f3' : '#ddd'};">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div>
+                                        <span style="font-weight: ${isMe ? 'bold' : 'normal'}; color: ${isMe ? '#1976d2' : '#333'};">
+                                            ${i + 1}. ${p.username} ${isMe ? '(You)' : ''}
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <span class="badge ${p.isHost ? 'host' : ''} ${p.isReady ? 'ready' : ''}">
+                                            ${p.isHost ? '👑 Host' : ''} ${p.isReady ? '✓ Ready' : '⏳ Not Ready'}
+                                        </span>
+                                        ${showKickButton ? `<button onclick="kickPlayer('${playerId}')" style="background: #f44336; color: white; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; font-size: 12px;">Kick</button>` : ''}
+                                    </div>
+                                </div>
+                                ${p.score !== undefined ? `<div style="font-size: 0.85em; color: #666; margin-top: 5px;">Score: ${p.score}</div>` : ''}
                             </div>
                         `;
                     });
@@ -471,6 +669,57 @@
             } catch (error) {
                 log('❌ Error toggling ready: ' + error.message, 'error');
             }
+        }
+
+        // Leave Room
+        function leaveRoom() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
+            }
+            if (!currentRoom) {
+                log('❌ Not in any room', 'error');
+                return;
+            }
+
+            log('👋 Leaving room...', 'info');
+            socket.emit('room:leave', { roomCode: currentRoom }, (response) => {
+                if (response && response.success) {
+                    log('✅ Successfully left the room', 'success');
+                    currentRoom = null;
+                    isHost = false;
+                    document.getElementById('lobbySection').classList.add('hidden');
+                    document.getElementById('roomSection').classList.remove('hidden');
+                } else {
+                    log('❌ Failed to leave: ' + (response?.error || 'Unknown error'), 'error');
+                }
+            });
+        }
+
+        // Kick Player (Host Only)
+        function kickPlayer(playerId) {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
+            }
+            if (!currentRoom) {
+                log('❌ Not in any room', 'error');
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to kick this player?`)) {
+                return;
+            }
+
+            log('👢 Kicking player: ' + playerId, 'info');
+            socket.emit('room:kick', { roomCode: currentRoom, playerId }, (response) => {
+                if (response && response.success) {
+                    log('✅ Player kicked successfully', 'success');
+                    updateLobby();
+                } else {
+                    log('❌ Failed to kick: ' + (response?.error || 'Unknown error'), 'error');
+                }
+            });
         }
 
         // Show Question

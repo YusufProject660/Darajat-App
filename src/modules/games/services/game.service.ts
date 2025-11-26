@@ -641,12 +641,22 @@ class GameService implements IGameService {
       
       // Notify remaining players
       if (this.io) {
-        this.io.to(roomCode).emit('player:disconnected', {
+        const playersList = room.players.map((p: IPlayer) => ({
+          id: p.userId.toString(),
+          userId: p.userId.toString(),
+          username: p.username,
+          avatar: p.avatar,
+          score: p.score || 0,
+          isHost: p.isHost || false
+        }));
+
+        this.io.to(roomCode).emit('player:removed', {
           playerId,
           reason: 'disconnected',
+          players: playersList,
           newHostId,
-          players: room.players
-        });
+          roomCode
+        } as any);
         
         // If game was in progress, update game state
         if (room.status === 'active') {

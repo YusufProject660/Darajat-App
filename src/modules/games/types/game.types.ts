@@ -75,7 +75,8 @@ export interface GameState {
 export interface ClientEvents {
   // Room Events
   'room:join': (data: { roomCode: string; playerName: string; isHost?: boolean }, callback?: (response: { success: boolean; room?: any; player?: any; error?: string }) => void) => void;
-  'room:leave': () => void;
+  'room:leave': (data?: { roomCode?: string }, callback?: (response: { success: boolean; error?: string }) => void) => void;
+  'room:kick': (data: { roomCode: string; playerId: string }, callback?: (response: { success: boolean; error?: string }) => void) => void;
   
   // Game Events
   'game:start': () => void;
@@ -105,6 +106,7 @@ export interface ServerEvents {
   'player:joined': (data: { player: Player; players: Player[] }) => void;
   'player:left': (data: { playerId: string; players: Player[]; newHostId?: string }) => void;
   'player:disconnected': (data: { playerId: string; reason?: string }) => void;
+  'player:removed': (data: { playerId: string; reason: 'left' | 'kicked' | 'disconnected'; players: Player[]; newHostId?: string; roomCode: string }) => void;
   'player:ready': (data: { playerId: string; isReady: boolean }) => void;
   
   // Game Events
