@@ -43,11 +43,9 @@ import {
   getMyGames, 
   leaveGame,
   getQuestions,
-  submitAnswer,
   getGameSummary,
   getGameLeaderboard,
   finishGame,
-  startGame,
   kickPlayer,
   updateGameSettings,
   toggleReadyStatus
@@ -108,14 +106,6 @@ router.route('/questions/:roomCode')
   .get(protect, getQuestions)
   .all(methodNotAllowed);
 
-/**
- * @route   POST /api/game/submit-answer
- * @desc    Submit an answer to a question
- * @access  Private
- */
-router.route('/submit-answer')
-  .post(protect, submitAnswer)
-  .all(methodNotAllowed);
 
 /**
  * @route   GET /api/game/summary/:roomCode
@@ -156,14 +146,6 @@ router.route('/:roomCode/ready')
   })
   .all(methodNotAllowed);
 
-/**
- * @route   POST /api/game/:roomCode/start
- * @desc    Start the game (Host only)
- * @access  Private
- */
-router.route('/:roomCode/start')
-  .post(protect, isHost, isGameInLobby, startGame)
-  .all(methodNotAllowed);
 
 /**
  * @route   POST /api/game/:roomCode/players/:playerId/kick

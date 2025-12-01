@@ -24,4 +24,4 @@ const gameSchema = new Schema<IGame>(
   }
 );
 
-export const Game = mongoose.model<IGame>('Game', gameSchema);
+export const Game = mongoose.models.Game || mongoose.model<IGame>('Game', gameSchema);

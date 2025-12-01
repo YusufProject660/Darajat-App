@@ -257,6 +257,10 @@
                     <input type="text" id="roomCode" placeholder="Auto-generated" readonly>
                 </div>
                 <div class="form-group">
+                    <label>Game ID:</label>
+                    <input type="text" id="gameId" value="trivia_rush" placeholder="trivia_rush">
+                </div>
+                <div class="form-group">
                     <label>Number of Questions:</label>
                     <input type="number" id="numberOfQuestions" value="5" min="1" max="10">
                 </div>
@@ -348,7 +352,6 @@
                 <h2>👥 Lobby</h2>
                 <div id="roomInfo"></div>
                 <div id="playersList" class="players-list"></div>
-                <button onclick="toggleReady()" id="readyBtn">Mark Ready</button>
                 <button onclick="startGame()" id="startBtn" style="background: #f44336; margin-top: 10px;" disabled>Start Game (Host Only)</button>
                 <button onclick="leaveRoom()" id="leaveBtn" style="background: #ff9800; margin-top: 10px;">Leave Room</button>
                 <div id="lobbyStatus"></div>
@@ -422,10 +425,13 @@
         let currentQuestion = null;
         let currentQuestionIndex = 0;
         let totalQuestions = 0;
+        let allQuestions = []; // Store all questions
         let timerInterval = null;
         let timeLeft = 0;
         let timeLimit = 30; // Store timeLimit globally
         let isHost = false;
+        let hasAnsweredCurrentQuestion = false; // Track if answered current question
+        let questionStartTime = null; // Track when question was shown
 
         // Update API_URL from input field
         function updateApiUrl() {
@@ -447,31 +453,92 @@
 
             try {
                 log(`🔍 Testing connection to ${API_URL}...`, 'info');
+                log(`📡 Full URL: ${API_URL}/health`, 'info');
                 
-                const response = await fetch(`${API_URL}/health`, {
-                    method: 'GET',
-                    headers: { 'Accept': 'application/json' }
-                }).catch(() => {
-                    return fetch(`${API_URL}/api/auth/login`, {
-                        method: 'OPTIONS',
-                        headers: { 'Accept': 'application/json' }
+                // Try health endpoint first with timeout
+                let response;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+                
+                try {
+                    response = await fetch(`${API_URL}/health`, {
+                        method: 'GET',
+                        headers: { 
+                            'Accept': 'application/json',
+                            'ngrok-skip-browser-warning': 'true'
+                        },
+                        mode: 'cors',
+                        signal: controller.signal
                     });
-                });
+                    clearTimeout(timeoutId);
+                } catch (healthError) {
+                    clearTimeout(timeoutId);
+                    if (healthError.name === 'AbortError') {
+                        log(`⏱️ Request timed out after 10 seconds`, 'error');
+                        throw new Error('Connection timeout - server may be unreachable');
+                    }
+                    log(`⚠️ /health endpoint failed: ${healthError.message}`, 'warning');
+                    log('🔄 Trying /api/auth/login endpoint...', 'info');
+                    
+                    // Try login endpoint as fallback
+                    const controller2 = new AbortController();
+                    const timeoutId2 = setTimeout(() => controller2.abort(), 10000);
+                    try {
+                        response = await fetch(`${API_URL}/api/auth/login`, {
+                            method: 'OPTIONS',
+                            headers: { 
+                                'Accept': 'application/json',
+                                'ngrok-skip-browser-warning': 'true'
+                            },
+                            mode: 'cors',
+                            signal: controller2.signal
+                        });
+                        clearTimeout(timeoutId2);
+                    } catch (loginError) {
+                        clearTimeout(timeoutId2);
+                        if (loginError.name === 'AbortError') {
+                            log(`⏱️ Request timed out after 10 seconds`, 'error');
+                            throw new Error('Connection timeout - server may be unreachable');
+                        }
+                        log(`⚠️ /api/auth/login endpoint also failed: ${loginError.message}`, 'warning');
+                        throw loginError;
+                    }
+                }
 
-                if (response.ok || response.status === 404 || response.status === 405) {
+                if (response && (response.ok || response.status === 404 || response.status === 405)) {
                     log('✅ Server is reachable!', 'success');
+                    log(`📡 Response Status: ${response.status}`, 'info');
                     showStatus('loginStatus', 'Server is reachable. You can proceed with login.', 'success');
-                } else {
+                } else if (response) {
                     log(`⚠️ Server responded with status: ${response.status}`, 'warning');
                     showStatus('loginStatus', `Server responded (Status: ${response.status})`, 'info');
                 }
             } catch (error) {
                 log('❌ Cannot reach server: ' + error.message, 'error');
+                log('🔍 Error Details:', 'error');
+                log(`   Type: ${error.name || 'Unknown'}`, 'error');
+                log(`   Message: ${error.message}`, 'error');
+                
+                // Check for specific error types
+                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                    log('💡 Network Error - Possible causes:', 'warning');
+                    log('   1. Server is not running', 'warning');
+                    log('   2. ngrok tunnel is down or URL changed', 'warning');
+                    log('   3. CORS issue - check server CORS settings', 'warning');
+                    log('   4. SSL/Certificate issue with HTTPS', 'warning');
+                    log('   5. Firewall blocking the connection', 'warning');
+                } else if (error.message.includes('CORS')) {
+                    log('💡 CORS Error - Make sure:', 'warning');
+                    log('   1. Server allows your origin', 'warning');
+                    log('   2. ngrok URL is in allowed origins list', 'warning');
+                }
+                
                 log('💡 Make sure:', 'warning');
                 log('   1. Server is running', 'warning');
-                log('   2. Server URL is correct (e.g., http://localhost:5000)', 'warning');
+                log('   2. Server URL is correct (check ngrok URL)', 'warning');
                 log('   3. No trailing slash in URL', 'warning');
-                showStatus('loginStatus', 'Cannot reach server. Check logs.', 'error');
+                log('   4. ngrok tunnel is active', 'warning');
+                showStatus('loginStatus', 'Cannot reach server. Check logs for details.', 'error');
             }
         }
 
@@ -517,6 +584,31 @@
             element.textContent = message;
         }
 
+        // Helper function to safely parse JSON response (handles ngrok HTML responses)
+        async function safeJsonParse(response) {
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                const text = await response.text();
+                if (text.includes('<!DOCTYPE') || text.includes('<html')) {
+                    throw new Error('Received HTML instead of JSON. This might be ngrok interstitial page. Make sure to click through or use ngrok-skip-browser-warning header.');
+                }
+                throw new Error(`Server returned non-JSON response (Status: ${response.status}). Content-Type: ${contentType}`);
+            }
+            return await response.json();
+        }
+
+        // Helper function to get common headers for API calls
+        function getApiHeaders(includeAuth = true) {
+            const headers = {
+                'ngrok-skip-browser-warning': 'true',
+                'Accept': 'application/json'
+            };
+            if (includeAuth && token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            return headers;
+        }
+
         // ============================================
         // STEP 1: LOGIN (HTTP API)
         // ============================================
@@ -532,11 +624,15 @@
                 // HTTP API Call - Database me user verify hota hai
                 const response = await fetch(`${API_URL}/api/auth/login`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'ngrok-skip-browser-warning': 'true',
+                        'Accept': 'application/json'
+                    },
                     body: JSON.stringify({ email, password })
                 });
 
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 displayApiResponse(data, 'POST /api/auth/login');
                 if (data.status === 1 && data.data && data.data.token) {
                     token = data.data.token;
@@ -680,6 +776,26 @@
                 log('Reason: ' + (data.reason || 'Unknown'), 'info');
                 log('Remaining Players: ' + (data.players?.length || 0), 'info');
                 
+                // Check if current user was removed (should not acknowledge if removed)
+                const currentUserId = currentUser?.user_id || currentUser?._id;
+                if (data.playerId === currentUserId) {
+                    log('⚠️ You were removed from the room', 'error');
+                    showStatus('lobbyStatus', 'You were removed from the room', 'error');
+                    document.getElementById('lobbySection').classList.add('hidden');
+                    document.getElementById('roomSection').classList.remove('hidden');
+                    currentRoom = null;
+                    return; // Don't acknowledge if you were removed
+                }
+                
+                // Acknowledge message if taskId present (buffer system)
+                if (data.taskId) {
+                    socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                        if (response && response.success) {
+                            log('✅ Player removed message acknowledged', 'success');
+                        }
+                    });
+                }
+                
                 if (data.newHostId) {
                     log('👑 New Host Assigned: ' + data.newHostId, 'success');
                     showStatus('lobbyStatus', `👑 New host assigned!`, 'success');
@@ -692,17 +808,6 @@
                     if (statusDiv) statusDiv.textContent = '';
                 }, 3000);
                 
-                // Check if current user was removed
-                const currentUserId = currentUser?.user_id || currentUser?._id;
-                if (data.playerId === currentUserId) {
-                    log('⚠️ You were removed from the room', 'error');
-                    showStatus('lobbyStatus', 'You were removed from the room', 'error');
-                    document.getElementById('lobbySection').classList.add('hidden');
-                    document.getElementById('roomSection').classList.remove('hidden');
-                    currentRoom = null;
-                    return;
-                }
-                
                 updateLobby();
             });
 
@@ -711,27 +816,89 @@
                 updateLobby();
             });
 
-            socket.on('game:started', (data) => {
+            socket.on('game:started', async (data) => {
                 log('🎮 Game started!', 'success');
                 document.getElementById('lobbySection').classList.add('hidden');
                 document.getElementById('gameSection').classList.remove('hidden');
                 totalQuestions = data.totalQuestions || 0;
                 currentQuestionIndex = 0;
-                showQuestion(data.firstQuestion, data.timeLimit);
-            });
-
-            socket.on('question:new', (data) => {
-                log('❓ New question: ' + data.questionIndex, 'info');
-                currentQuestionIndex = data.questionIndex || currentQuestionIndex;
-                showQuestion(data.question, data.timeLimit);
+                hasAnsweredCurrentQuestion = false;
+                
+                // Fetch all questions from API
+                try {
+                    log('📥 Fetching questions from API...', 'info');
+                    const response = await fetch(`${API_URL}/api/game/questions/${currentRoom}`, {
+                        headers: getApiHeaders(true)
+                    });
+                    const questionsData = await safeJsonParse(response);
+                    log(`📥 Questions API Response: ${JSON.stringify(questionsData, null, 2)}`, 'info');
+                    
+                    if (questionsData.status === 1) {
+                        allQuestions = questionsData.data.questions || [];
+                        log(`✅ Loaded ${allQuestions.length} questions`, 'success');
+                        log(`📋 First question preview: ${JSON.stringify(allQuestions[0], null, 2)}`, 'info');
+                        
+                        // Show first question
+                        if (allQuestions.length > 0) {
+                            log(`🎯 Showing first question...`, 'info');
+                            showQuestion(allQuestions[0], 30);
+                        } else {
+                            log('❌ No questions in array!', 'error');
+                            showStatus('gameStatus', 'No questions available', 'error');
+                        }
+                    } else {
+                        log('❌ Failed to load questions: ' + questionsData.message, 'error');
+                        showStatus('gameStatus', 'Failed to load questions: ' + questionsData.message, 'error');
+                    }
+                } catch (error) {
+                    log('❌ Error fetching questions: ' + error.message, 'error');
+                }
             });
 
             socket.on('question:answered', (data) => {
-                log('✅ Answer submitted by player', 'info');
+                log('✅ Answer submitted by player: ' + data.playerId, 'info');
+                // Handle ACK if taskId present
+                if (data.taskId) {
+                    socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                        if (response && response.success) {
+                            log('✅ Message acknowledged', 'success');
+                        }
+                    });
+                }
+            });
+
+            socket.on('all:answered', async (data) => {
+                log('🎯 All players answered question: ' + data.questionId, 'success');
+                // Request leaderboard for this question
+                socket.emit('question:leaderboard', { questionId: data.questionId }, (response) => {
+                    if (response && response.success) {
+                        log('📊 Leaderboard received', 'success');
+                        showQuestionLeaderboard(response.data);
+                    }
+                });
+            });
+
+            socket.on('question:leaderboard', (data) => {
+                log('📊 Question leaderboard received', 'success');
+                // Handle ACK if taskId present
+                if (data.taskId) {
+                    socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                        if (response && response.success) {
+                            log('✅ Leaderboard message acknowledged', 'success');
+                        }
+                    });
+                }
+                showQuestionLeaderboard(data);
+                
+                // After showing leaderboard, wait 3 seconds then show next question
+                setTimeout(() => {
+                    moveToNextQuestion();
+                }, 3000);
             });
 
             socket.on('game:ended', (data) => {
                 log('🏁 Game ended!', 'success');
+                if (timerInterval) clearInterval(timerInterval);
                 document.getElementById('gameSection').classList.add('hidden');
                 document.getElementById('summarySection').classList.remove('hidden');
                 getSummary();
@@ -751,6 +918,7 @@
                 return;
             }
 
+            const gameId = document.getElementById('gameId')?.value || 'trivia_rush';
             const numberOfQuestions = parseInt(document.getElementById('numberOfQuestions').value) || 5;
             const maximumPlayers = parseInt(document.getElementById('maximumPlayers').value) || 7;
             const roomCode = 'ROOM' + Date.now();
@@ -803,25 +971,35 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
+                        'Authorization': `Bearer ${token}`,
+                        'ngrok-skip-browser-warning': 'true',
+                        'Accept': 'application/json'
                     },
                     body: JSON.stringify({
+                        gameId: gameId,
                         categories,
                         numberOfQuestions,
                         maximumPlayers
                     })
                 });
 
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 if (data.status === 1) {
                     currentRoom = data.data.roomCode;
+                    isHost = true; // Set isHost to true when creating room
                     log('✅ Step 3a: Room created in database: ' + currentRoom, 'success');
+                    log('👑 Host status set: ' + isHost, 'success');
                     showStatus('createRoomStatus', 'Room created: ' + currentRoom, 'success');
                     
                     // Socket join is now handled by joinGame API automatically
                     log('✅ Socket room join handled by API automatically', 'success');
                     document.getElementById('lobbySection').classList.remove('hidden');
+                    
+                    // Update lobby immediately and then again after delay to ensure button state is correct
                     updateLobby();
+                    setTimeout(() => {
+                        updateLobby();
+                    }, 1000);
                 } else {
                     log('❌ Failed to create room: ' + data.message, 'error');
                     showStatus('createRoomStatus', data.message, 'error');
@@ -860,7 +1038,9 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
+                        'Authorization': `Bearer ${token}`,
+                        'ngrok-skip-browser-warning': 'true',
+                        'Accept': 'application/json'
                     },
                     body: JSON.stringify({
                         roomCode: roomCode,
@@ -869,7 +1049,7 @@
                     })
                 });
 
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 displayApiResponse(data, 'POST /api/game/join');
                 if (data.status === 1) {
                     currentRoom = roomCode;
@@ -905,9 +1085,10 @@
 
             try {
                 const response = await fetch(`${API_URL}/api/game/lobby/${currentRoom}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: getApiHeaders(true)
                 });
-                const data = await response.json();
+                
+                const data = await safeJsonParse(response);
                 
                 if (data.status === 1) {
                     const lobby = data.data;
@@ -922,23 +1103,33 @@
                     
                     // Check if current user is host - use both isHost variable and lobby data
                     const currentId = currentUserId?.toString();
-                    const isCurrentUserHost = isHost || (lobby.players || []).some(p => {
+                    
+                    // First check from lobby data (most reliable)
+                    const isHostFromLobby = (lobby.players || []).some(p => {
                         const pid = (p.id || p.userId?._id || p.userId)?.toString();
                         if (!pid || !currentId) return false;
                         return pid === currentId && p.isHost;
                     });
                     
+                    // Use lobby data if available, otherwise use isHost variable
+                    const isCurrentUserHost = isHostFromLobby || isHost;
+                    
+                    // Update isHost variable if we found it from lobby
+                    if (isHostFromLobby && !isHost) {
+                        isHost = true;
+                        log('👑 Host status updated from lobby data', 'success');
+                    }
+                    
                     // Debug log for host check
-                    console.log('🔍 [DEBUG] Host Check:', {
-                        isHost: isHost,
-                        currentUserId: currentUserId,
-                        isCurrentUserHost: isCurrentUserHost,
-                        players: (lobby.players || []).map(p => ({
-                            userId: p.userId?._id || p.userId,
-                            username: p.username,
-                            isHost: p.isHost
-                        }))
-                    });
+                    log('🔍 [DEBUG] Host Check:', 'info');
+                    log(`   - isHost variable: ${isHost}`, 'info');
+                    log(`   - currentUserId: ${currentUserId}`, 'info');
+                    log(`   - isCurrentUserHost: ${isCurrentUserHost}`, 'info');
+                    log(`   - Players: ${JSON.stringify((lobby.players || []).map(p => ({
+                        userId: p.userId?._id || p.userId,
+                        username: p.username,
+                        isHost: p.isHost
+                    })), null, 2)}`, 'info');
                     
                     (lobby.players || []).forEach((p, i) => {
                         // Extract player ID - handle multiple formats (lobby API returns 'id' field)
@@ -992,53 +1183,71 @@
                     });
                     document.getElementById('playersList').innerHTML = playersHtml;
 
-                    // Enable start button if all ready
-                    const allReady = (lobby.players || []).every(p => p.isReady);
-                    document.getElementById('startBtn').disabled = !allReady || lobby.status !== 'waiting';
+                    // Enable start button (no ready check needed, minimum 2 players)
+                    const minPlayers = (lobby.players || []).length >= 2;
+                    const startBtn = document.getElementById('startBtn');
+                    
+                    // Debug logging
+                    log(`🔍 Start Button Debug:`, 'info');
+                    log(`   - Room Status: ${lobby.status}`, 'info');
+                    log(`   - isHost variable: ${isHost}`, 'info');
+                    log(`   - isCurrentUserHost: ${isCurrentUserHost}`, 'info');
+                    log(`   - Min Players (>=2): ${minPlayers} (Total: ${(lobby.players || []).length})`, 'info');
+                    log(`   - Current User ID: ${currentUserId}`, 'info');
+                    
+                    const statusCheck = lobby.status === 'waiting';
+                    const hostCheck = isCurrentUserHost;
+                    const playersCheck = minPlayers;
+                    
+                    const shouldDisable = !statusCheck || !hostCheck || !playersCheck;
+                    log(`   - Should Disable: ${shouldDisable}`, 'info');
+                    log(`   - Reasons: status!='waiting': ${!statusCheck}, !isHost: ${!hostCheck}, !minPlayers: ${!playersCheck}`, 'info');
+                    
+                    if (startBtn) {
+                        // Always show button if user is host, but disable based on conditions
+                        if (isCurrentUserHost) {
+                            startBtn.style.display = 'block';
+                            startBtn.disabled = shouldDisable;
+                            log(`✅ Start button ${shouldDisable ? 'DISABLED' : 'ENABLED'} and visible for host`, shouldDisable ? 'warning' : 'success');
+                            if (shouldDisable) {
+                                const reasons = [];
+                                if (!statusCheck) reasons.push('Room status is not waiting');
+                                if (!hostCheck) reasons.push('User is not host');
+                                if (!playersCheck) reasons.push('Less than 2 players');
+                                log(`   ⚠️ Button disabled because: ${reasons.join(', ')}`, 'warning');
+                            }
+                        } else {
+                            startBtn.style.display = 'none';
+                            log(`⚠️ Start button hidden (not host)`, 'warning');
+                        }
+                    }
                 }
             } catch (error) {
                 log('❌ Error updating lobby: ' + error.message, 'error');
             }
         }
 
-        // Toggle Ready
-        async function toggleReady() {
-            if (!currentRoom) return;
+        // Toggle Ready - REMOVED (No longer needed, ready check removed)
 
-            try {
-                const response = await fetch(`${API_URL}/api/game/${currentRoom}/ready`, {
-                    method: 'PATCH',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await response.json();
-                if (data.status === 1) {
-                    log('✅ Ready status toggled', 'success');
-                    updateLobby();
-                }
-            } catch (error) {
-                log('❌ Error toggling ready: ' + error.message, 'error');
+        // Start Game (Socket Event)
+        function startGame() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
             }
-        }
+            if (!currentRoom) {
+                log('❌ Not in any room', 'error');
+                return;
+            }
 
-        // Start Game
-        async function startGame() {
-            if (!currentRoom) return;
-
-            try {
-                log('🎮 Starting game...', 'info');
-                const response = await fetch(`${API_URL}/api/game/${currentRoom}/start`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await response.json();
-                if (data.status === 1) {
-                    log('✅ Game started!', 'success');
+            log('🎮 Starting game via socket...', 'info');
+            socket.emit('game:start', {}, (response) => {
+                if (response && response.success) {
+                    log('✅ Game start request sent', 'success');
                 } else {
-                    log('❌ Failed to start: ' + data.message, 'error');
+                    log('❌ Failed to start: ' + (response?.error || 'Unknown error'), 'error');
                 }
-            } catch (error) {
-                log('❌ Error starting game: ' + error.message, 'error');
-            }
+            });
         }
 
         // Leave Room
@@ -1103,25 +1312,59 @@
             currentQuestion = question;
             timeLimit = questionTimeLimit || 30; // Store globally
             timeLeft = timeLimit;
+            hasAnsweredCurrentQuestion = false;
+            questionStartTime = Date.now();
+            
             document.getElementById('timer').textContent = timeLeft;
+            document.getElementById('timer').classList.remove('warning', 'danger');
 
             const container = document.getElementById('questionContainer');
+            if (!container) {
+                log('❌ Question container not found!', 'error');
+                return;
+            }
+            
             const questionNum = currentQuestionIndex + 1;
-            const totalQ = totalQuestions || '?';
+            const totalQ = totalQuestions || allQuestions.length || '?';
+            const questionText = question.question || question.questionText || 'No question available';
+            const questionOptions = question.options || [];
+            
+            log(`📝 Showing question ${questionNum}: ${questionText}`, 'info');
+            log(`📝 Options count: ${questionOptions.length}`, 'info');
+            log(`📝 Full question object: ${JSON.stringify(question, null, 2)}`, 'info');
+            
             container.innerHTML = `
                 <h3>Question ${questionNum}${totalQ !== '?' ? ' of ' + totalQ : ''}</h3>
-                <div class="question-text">${question.question}</div>
+                <div class="question-text">${questionText}</div>
                 <div id="optionsContainer" style="margin-top: 25px;"></div>
+                <div id="leaderboardContainer" style="margin-top: 20px; display: none;"></div>
             `;
 
             const optionsContainer = document.getElementById('optionsContainer');
-            (question.options || []).forEach((option, index) => {
+            if (!optionsContainer) {
+                log('❌ Options container not found!', 'error');
+                return;
+            }
+            
+            if (questionOptions.length === 0) {
+                optionsContainer.innerHTML = '<p style="color: red; padding: 20px;">⚠️ No options available for this question</p>';
+                log('⚠️ No options found for question', 'warning');
+                return;
+            }
+            
+            questionOptions.forEach((option, index) => {
+                if (!option) {
+                    log(`⚠️ Option ${index} is empty/null`, 'warning');
+                    return;
+                }
                 const btn = document.createElement('button');
                 btn.className = 'option-btn';
                 btn.textContent = `${String.fromCharCode(65 + index)}. ${option}`;
                 btn.onclick = () => submitAnswer(index);
                 optionsContainer.appendChild(btn);
             });
+            
+            log(`✅ Question displayed with ${questionOptions.length} options`, 'success');
 
             // Start timer with visual feedback
             const timerElement = document.getElementById('timer');
@@ -1143,46 +1386,135 @@
                     clearInterval(timerInterval);
                     timerElement.textContent = 'Time Up!';
                     timerElement.classList.add('danger');
-                    submitAnswer(-1); // Skip
+                    handleTimeout();
                 }
             }, 1000);
         }
 
-        // Submit Answer
-        async function submitAnswer(selectedOption) {
+        // Show Question Leaderboard
+        function showQuestionLeaderboard(data) {
+            const leaderboardContainer = document.getElementById('leaderboardContainer');
+            if (!leaderboardContainer) return;
+
+            let html = '<h4 style="margin-top: 20px; color: #4caf50;">📊 Question Leaderboard</h4>';
+            html += `<p style="color: #666; margin: 10px 0;">Correct Answer: Option ${String.fromCharCode(65 + data.correctAnswer)}</p>`;
+            html += '<div style="background: white; padding: 15px; border-radius: 8px; margin-top: 10px;">';
+            
+            data.leaderboard.forEach((player, index) => {
+                const statusIcon = player.hasAnswered 
+                    ? (player.isCorrect ? '✅' : '❌') 
+                    : '⏱️';
+                html += `
+                    <div style="padding: 10px; margin: 5px 0; background: ${player.isCorrect ? '#e8f5e9' : '#ffebee'}; border-radius: 5px; display: flex; justify-content: space-between;">
+                        <span><strong>${index + 1}.</strong> ${player.username} ${statusIcon}</span>
+                        <span>Score: ${player.score} | Time: ${player.timeTaken}s</span>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            
+            leaderboardContainer.innerHTML = html;
+            leaderboardContainer.style.display = 'block';
+        }
+
+        // Handle Timeout
+        function handleTimeout() {
+            if (hasAnsweredCurrentQuestion) {
+                log('⚠️ Timeout but already answered', 'warning');
+                return;
+            }
+            
+            log('⏱️ Time expired - submitting timeout', 'warning');
+            const timeTaken = timeLimit; // Full time limit
+            submitAnswer(null, timeTaken, true);
+        }
+
+        // Submit Answer (Socket Event)
+        function submitAnswer(selectedOption, timeTakenOverride = null, isTimeout = false) {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
+            }
             if (!currentQuestion || !currentRoom) return;
+            if (hasAnsweredCurrentQuestion && !isTimeout) {
+                log('⚠️ Already answered this question', 'warning');
+                return;
+            }
 
             // Disable buttons
             document.querySelectorAll('.option-btn').forEach(btn => btn.disabled = true);
             if (timerInterval) clearInterval(timerInterval);
 
-            try {
-                log(`📝 Submitting answer: ${selectedOption}`, 'info');
-                const response = await fetch(`${API_URL}/api/game/submit-answer`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({
-                        roomCode: currentRoom,
-                        questionId: currentQuestion.id || currentQuestion._id,
-                        selectedOption: selectedOption,
-                        timeTaken: timeLimit - timeLeft
-                    })
-                });
+            const questionId = currentQuestion._id || currentQuestion.id;
+            const timeTaken = timeTakenOverride !== null 
+                ? timeTakenOverride 
+                : (questionStartTime ? Math.floor((Date.now() - questionStartTime) / 1000) : timeLimit - timeLeft);
 
-                const data = await response.json();
-                if (data.status === 1) {
+            log(`📝 Submitting answer via socket: ${selectedOption !== null ? selectedOption : 'TIMEOUT'} (Time: ${timeTaken}s)`, 'info');
+            
+            hasAnsweredCurrentQuestion = true;
+
+            socket.emit('answer:submit', {
+                questionId: questionId,
+                answer: selectedOption,
+                timeTaken: timeTaken
+            }, (response) => {
+                if (response && response.success) {
                     log('✅ Answer submitted successfully', 'success');
-                    showStatus('gameStatus', 'Answer submitted! Waiting for next question...', 'success');
-                    // Don't increment here - wait for question:new event
+                    showStatus('gameStatus', 'Answer submitted! Waiting for others...', 'success');
                 } else {
-                    log('❌ Failed to submit: ' + data.message, 'error');
-                    showStatus('gameStatus', 'Failed to submit answer: ' + data.message, 'error');
+                    log('❌ Failed to submit: ' + (response?.error || 'Unknown error'), 'error');
+                    showStatus('gameStatus', 'Failed to submit answer', 'error');
+                    hasAnsweredCurrentQuestion = false; // Allow retry
                 }
-            } catch (error) {
-                log('❌ Error submitting answer: ' + error.message, 'error');
+            });
+        }
+
+        // Move to Next Question
+        function moveToNextQuestion() {
+            currentQuestionIndex++;
+            hasAnsweredCurrentQuestion = false;
+            
+            if (currentQuestionIndex >= allQuestions.length) {
+                log('🏁 All questions completed!', 'success');
+                
+                // Clear timer
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                }
+                
+                // Hide game section, show summary section
+                const gameSection = document.getElementById('gameSection');
+                const summarySection = document.getElementById('summarySection');
+                if (gameSection) gameSection.classList.add('hidden');
+                if (summarySection) summarySection.classList.remove('hidden');
+                
+                // Hide question leaderboard container
+                const leaderboardContainer = document.getElementById('leaderboardContainer');
+                if (leaderboardContainer) {
+                    leaderboardContainer.style.display = 'none';
+                }
+                
+                // Load final summary and leaderboard
+                log('📊 Loading final summary and leaderboard...', 'info');
+                getSummary();
+                setTimeout(() => {
+                    log('📊 Calling getLeaderboard() after 500ms delay...', 'info');
+                    getLeaderboard();
+                }, 500);
+                
+                return;
+            }
+            
+            // Show next question
+            if (allQuestions[currentQuestionIndex]) {
+                showQuestion(allQuestions[currentQuestionIndex], 30);
+                showStatus('gameStatus', '', 'info');
+                const leaderboardContainer = document.getElementById('leaderboardContainer');
+                if (leaderboardContainer) {
+                    leaderboardContainer.style.display = 'none';
+                }
             }
         }
 
@@ -1192,9 +1524,9 @@
 
             try {
                 const response = await fetch(`${API_URL}/api/game/summary/${currentRoom}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: getApiHeaders(true)
                 });
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 if (data.status === 1) {
                     const summary = data.data;
                     document.getElementById('summaryContent').innerHTML = `
@@ -1214,21 +1546,39 @@
 
         // Get Leaderboard
         async function getLeaderboard() {
-            if (!currentRoom) return;
+            log('📊 getLeaderboard() called', 'info');
+            log('📊 currentRoom: ' + currentRoom, 'info');
+            
+            if (!currentRoom) {
+                log('❌ No room code for leaderboard', 'error');
+                return;
+            }
 
             try {
+                log('📊 Fetching leaderboard from API...', 'info');
                 const response = await fetch(`${API_URL}/api/game/leaderboard/${currentRoom}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: getApiHeaders(true)
                 });
-                const data = await response.json();
+                
+                log('📊 API Response status: ' + response.status, 'info');
+                const data = await safeJsonParse(response);
                 if (data.status === 1) {
-                    const leaderboard = data.data.leaderboard || [];
-                    let html = '<h3>Leaderboard</h3><ol>';
+                    const leaderboard = data.data?.leaderboard?.players || data.data?.leaderboard || [];
+                    let html = '<h3>🏆 Final Leaderboard</h3><ol style="list-style: none; padding: 0;">';
                     leaderboard.forEach((player, index) => {
-                        html += `<li>${player.username} - Score: ${player.score} (Correct: ${player.correctAnswers})</li>`;
+                        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+                        html += `<li style="padding: 10px; margin: 5px 0; background: ${index < 3 ? '#f0f0f0' : '#fff'}; border-radius: 5px;">
+                            <strong>${medal}</strong> ${player.username || 'Unknown'} 
+                            - <strong>Score:</strong> ${player.points || player.score || 0} 
+                            - <strong>Correct:</strong> ${player.correctAnswers || 0} 
+                            - <strong>Accuracy:</strong> ${player.accuracy || 0}%
+                        </li>`;
                     });
                     html += '</ol>';
                     document.getElementById('leaderboardContent').innerHTML = html;
+                    log('✅ Leaderboard loaded successfully', 'success');
+                } else {
+                    log('⚠️ ' + (data.message || 'Failed to load leaderboard'), 'warning');
                 }
             } catch (error) {
                 log('❌ Error getting leaderboard: ' + error.message, 'error');
@@ -1240,9 +1590,9 @@
             if (!currentRoom) { log('❌ No room code', 'error'); return; }
             try {
                 const response = await fetch(`${API_URL}/api/game/lobby/${currentRoom}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: getApiHeaders(true)
                 });
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 document.getElementById('apiResponse').textContent = JSON.stringify(data, null, 2);
             } catch (error) {
                 document.getElementById('apiResponse').textContent = 'Error: ' + error.message;
@@ -1253,9 +1603,9 @@
             if (!currentRoom) { log('❌ No room code', 'error'); return; }
             try {
                 const response = await fetch(`${API_URL}/api/game/questions/${currentRoom}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: getApiHeaders(true)
                 });
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 document.getElementById('apiResponse').textContent = JSON.stringify(data, null, 2);
             } catch (error) {
                 document.getElementById('apiResponse').textContent = 'Error: ' + error.message;
@@ -1266,9 +1616,9 @@
             if (!currentRoom) { log('❌ No room code', 'error'); return; }
             try {
                 const response = await fetch(`${API_URL}/api/game/summary/${currentRoom}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: getApiHeaders(true)
                 });
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 document.getElementById('apiResponse').textContent = JSON.stringify(data, null, 2);
             } catch (error) {
                 document.getElementById('apiResponse').textContent = 'Error: ' + error.message;
@@ -1279,9 +1629,9 @@
             if (!currentRoom) { log('❌ No room code', 'error'); return; }
             try {
                 const response = await fetch(`${API_URL}/api/game/leaderboard/${currentRoom}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: getApiHeaders(true)
                 });
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 document.getElementById('apiResponse').textContent = JSON.stringify(data, null, 2);
             } catch (error) {
                 document.getElementById('apiResponse').textContent = 'Error: ' + error.message;
@@ -1291,9 +1641,9 @@
         async function testGetMyGames() {
             try {
                 const response = await fetch(`${API_URL}/api/game/my-games`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: getApiHeaders(true)
                 });
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 document.getElementById('apiResponse').textContent = JSON.stringify(data, null, 2);
             } catch (error) {
                 document.getElementById('apiResponse').textContent = 'Error: ' + error.message;
@@ -1304,9 +1654,9 @@
             if (!currentRoom) { log('❌ No room code', 'error'); return; }
             try {
                 const response = await fetch(`${API_URL}/api/game/room/${currentRoom}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    headers: getApiHeaders(true)
                 });
-                const data = await response.json();
+                const data = await safeJsonParse(response);
                 document.getElementById('apiResponse').textContent = JSON.stringify(data, null, 2);
             } catch (error) {
                 document.getElementById('apiResponse').textContent = 'Error: ' + error.message;

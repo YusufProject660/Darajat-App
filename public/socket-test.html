@@ -309,10 +309,20 @@
                 <h2>👥 Lobby</h2>
                 <div id="roomInfo"></div>
                 <div id="playersList" class="players-list"></div>
-                <button onclick="toggleReady()" id="readyBtn" style="background: #2196f3;">Mark Ready</button>
                 <button onclick="startGame()" id="startBtn" style="background: #f44336; margin-top: 10px;" disabled>Start Game (Host Only)</button>
                 <button onclick="leaveRoom()" id="leaveBtn" style="background: #ff9800; margin-top: 10px;">Leave Room</button>
                 <div id="lobbyStatus"></div>
+            </div>
+
+            <!-- Game Section -->
+            <div class="section hidden" id="gameSection">
+                <h2>🎮 Game In Progress</h2>
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <div style="font-size: 3em; font-weight: bold; color: #4caf50; padding: 20px; background: #f1f8f4; border-radius: 10px; border: 3px solid #4caf50;" id="timer">--</div>
+                    <p style="color: #666; margin-top: 10px;">Time Remaining</p>
+                </div>
+                <div id="questionContainer" style="background: #fff3e0; padding: 20px; border-radius: 10px; margin: 15px 0; border: 2px solid #ff9800;"></div>
+                <div id="gameStatus"></div>
             </div>
 
             <!-- API Response Section -->
@@ -343,6 +353,15 @@
         let currentRoom = null;
         let currentUser = null;
         let isHost = false;
+        let currentQuestion = null;
+        let currentQuestionIndex = 0;
+        let totalQuestions = 0;
+        let allQuestions = [];
+        let timerInterval = null;
+        let timeLeft = 0;
+        let timeLimit = 30;
+        let hasAnsweredCurrentQuestion = false;
+        let questionStartTime = null;
 
         function log(message, type = 'info') {
             const logsDiv = document.getElementById('logs');
@@ -634,7 +653,7 @@
                     log(`Full Data: ${JSON.stringify(data, null, 2)}`, 'info');
                     log(`════════════════════════════════════════════════`, 'info');
                     
-                    // Check if current user was removed
+                    // Check if current user was removed (should not acknowledge if removed)
                     const currentUserId = currentUser?.user_id || currentUser?._id;
                     if (data.playerId === currentUserId) {
                         log('⚠️ You were removed from the room', 'error');
@@ -642,7 +661,16 @@
                         document.getElementById('createRoomSection').style.display = 'block';
                         document.getElementById('joinRoomSection').style.display = 'block';
                         currentRoom = null;
-                        return;
+                        return; // Don't acknowledge if you were removed
+                    }
+                    
+                    // Acknowledge message if taskId present (buffer system)
+                    if (data.taskId) {
+                        socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                            if (response && response.success) {
+                                log('✅ Player removed message acknowledged', 'success');
+                            }
+                        });
                     }
                     
                     updateLobby();
@@ -653,16 +681,82 @@
                     updateLobby();
                 });
 
-                socket.on('game:started', (data) => {
+                socket.on('game:started', async (data) => {
                     log(`🎮 Game started: ${JSON.stringify(data, null, 2)}`, 'success');
-                });
-
-                socket.on('question:new', (data) => {
-                    log(`❓ New question: ${JSON.stringify(data, null, 2)}`, 'info');
+                    document.getElementById('lobbySection').classList.add('hidden');
+                    document.getElementById('gameSection').classList.remove('hidden');
+                    totalQuestions = data.totalQuestions || 0;
+                    currentQuestionIndex = 0;
+                    hasAnsweredCurrentQuestion = false;
+                    
+                    // Fetch all questions from API
+                    try {
+                        log('📥 Fetching questions from API...', 'info');
+                        const response = await fetch(`${apiUrl}/api/game/questions/${currentRoom}`, {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        const questionsData = await response.json();
+                        if (questionsData.status === 1) {
+                            allQuestions = questionsData.data.questions || [];
+                            log(`✅ Loaded ${allQuestions.length} questions`, 'success');
+                            // Show first question
+                            if (allQuestions.length > 0) {
+                                showQuestion(allQuestions[0], 30);
+                            }
+                        } else {
+                            log('❌ Failed to load questions: ' + questionsData.message, 'error');
+                        }
+                    } catch (error) {
+                        log('❌ Error fetching questions: ' + error.message, 'error');
+                    }
                 });
 
                 socket.on('question:answered', (data) => {
-                    log(`✅ Answer submitted: ${JSON.stringify(data, null, 2)}`, 'info');
+                    log(`✅ Answer submitted by player: ${data.playerId}`, 'info');
+                    // Handle ACK if taskId present
+                    if (data.taskId) {
+                        socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                            if (response && response.success) {
+                                log('✅ Message acknowledged', 'success');
+                            }
+                        });
+                    }
+                });
+
+                socket.on('all:answered', async (data) => {
+                    log(`🎯 All players answered question: ${data.questionId}`, 'success');
+                    // Request leaderboard for this question
+                    socket.emit('question:leaderboard', { questionId: data.questionId }, (response) => {
+                        if (response && response.success) {
+                            log('📊 Leaderboard received', 'success');
+                            showQuestionLeaderboard(response.data);
+                        }
+                    });
+                });
+
+                socket.on('question:leaderboard', (data) => {
+                    log('📊 Question leaderboard received', 'success');
+                    // Handle ACK if taskId present
+                    if (data.taskId) {
+                        socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                            if (response && response.success) {
+                                log('✅ Leaderboard message acknowledged', 'success');
+                            }
+                        });
+                    }
+                    showQuestionLeaderboard(data);
+                    
+                    // After showing leaderboard, wait 3 seconds then show next question
+                    setTimeout(() => {
+                        moveToNextQuestion();
+                    }, 3000);
+                });
+
+                socket.on('game:ended', (data) => {
+                    log('🏁 Game ended!', 'success');
+                    if (timerInterval) clearInterval(timerInterval);
+                    document.getElementById('gameSection').classList.add('hidden');
+                    log(`Game ended data: ${JSON.stringify(data, null, 2)}`, 'info');
                 });
 
                 socket.on('error:general', (data) => {
@@ -977,43 +1071,195 @@
             }
         }
 
-        // Toggle Ready
-        async function toggleReady() {
-            if (!currentRoom) return;
+        // Toggle Ready - REMOVED (No longer needed, ready check removed)
 
-            try {
-                const response = await fetch(`${apiUrl}/api/game/${currentRoom}/ready`, {
-                    method: 'PATCH',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await response.json();
-                if (data.status === 1) {
-                    log('✅ Ready status toggled', 'success');
-                    updateLobby();
-                }
-            } catch (error) {
-                log('❌ Error toggling ready: ' + error.message, 'error');
+        // Start Game (Socket Event)
+        function startGame() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
             }
+            if (!currentRoom) {
+                log('❌ Not in any room', 'error');
+                return;
+            }
+
+            log('🎮 Starting game via socket...', 'info');
+            socket.emit('game:start', {}, (response) => {
+                if (response && response.success) {
+                    log('✅ Game start request sent', 'success');
+                } else {
+                    log('❌ Failed to start: ' + (response?.error || 'Unknown error'), 'error');
+                }
+            });
         }
 
-        // Start Game
-        async function startGame() {
-            if (!currentRoom) return;
+        // Show Question
+        function showQuestion(question, questionTimeLimit) {
+            if (!question) return;
 
-            try {
-                log('🎮 Starting game...', 'info');
-                const response = await fetch(`${apiUrl}/api/game/${currentRoom}/start`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await response.json();
-                if (data.status === 1) {
-                    log('✅ Game started!', 'success');
+            currentQuestion = question;
+            timeLimit = questionTimeLimit || 30;
+            timeLeft = timeLimit;
+            hasAnsweredCurrentQuestion = false;
+            questionStartTime = Date.now();
+            
+            const timerElement = document.getElementById('timer');
+            timerElement.textContent = timeLeft;
+            timerElement.classList.remove('warning', 'danger');
+
+            const container = document.getElementById('questionContainer');
+            const questionNum = currentQuestionIndex + 1;
+            const totalQ = totalQuestions || allQuestions.length || '?';
+            container.innerHTML = `
+                <h3 style="color: #e65100; margin-bottom: 15px;">Question ${questionNum}${totalQ !== '?' ? ' of ' + totalQ : ''}</h3>
+                <div style="font-size: 1.2em; margin: 15px 0; line-height: 1.6;">${question.question || question.questionText}</div>
+                <div id="optionsContainer" style="margin-top: 25px;"></div>
+                <div id="leaderboardContainer" style="margin-top: 20px; display: none;"></div>
+            `;
+
+            const optionsContainer = document.getElementById('optionsContainer');
+            (question.options || []).forEach((option, index) => {
+                const btn = document.createElement('button');
+                btn.style.cssText = 'display: block; width: 100%; padding: 15px; margin: 10px 0; background: white; border: 2px solid #e0e0e0; border-radius: 8px; cursor: pointer; text-align: left; transition: all 0.3s;';
+                btn.textContent = `${String.fromCharCode(65 + index)}. ${option}`;
+                btn.onmouseover = () => { btn.style.borderColor = '#4caf50'; btn.style.background = '#f1f8f4'; };
+                btn.onmouseout = () => { btn.style.borderColor = '#e0e0e0'; btn.style.background = 'white'; };
+                btn.onclick = () => submitAnswer(index);
+                optionsContainer.appendChild(btn);
+            });
+
+            // Start timer with visual feedback
+            if (timerInterval) clearInterval(timerInterval);
+            
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                timerElement.textContent = timeLeft;
+                
+                // Change color based on time left
+                timerElement.classList.remove('warning', 'danger');
+                if (timeLeft <= 5) {
+                    timerElement.style.color = '#f44336';
+                    timerElement.style.borderColor = '#f44336';
+                    timerElement.style.background = '#ffebee';
+                } else if (timeLeft <= 10) {
+                    timerElement.style.color = '#ff9800';
+                    timerElement.style.borderColor = '#ff9800';
+                    timerElement.style.background = '#fff3e0';
                 } else {
-                    log('❌ Failed to start: ' + data.message, 'error');
+                    timerElement.style.color = '#4caf50';
+                    timerElement.style.borderColor = '#4caf50';
+                    timerElement.style.background = '#f1f8f4';
                 }
-            } catch (error) {
-                log('❌ Error starting game: ' + error.message, 'error');
+                
+                if (timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    timerElement.textContent = 'Time Up!';
+                    timerElement.style.color = '#f44336';
+                    timerElement.style.borderColor = '#f44336';
+                    timerElement.style.background = '#ffebee';
+                    handleTimeout();
+                }
+            }, 1000);
+        }
+
+        // Show Question Leaderboard
+        function showQuestionLeaderboard(data) {
+            const leaderboardContainer = document.getElementById('leaderboardContainer');
+            if (!leaderboardContainer) return;
+
+            let html = '<h4 style="margin-top: 20px; color: #4caf50;">📊 Question Leaderboard</h4>';
+            html += `<p style="color: #666; margin: 10px 0;">Correct Answer: Option ${String.fromCharCode(65 + data.correctAnswer)}</p>`;
+            html += '<div style="background: white; padding: 15px; border-radius: 8px; margin-top: 10px;">';
+            
+            data.leaderboard.forEach((player, index) => {
+                const statusIcon = player.hasAnswered 
+                    ? (player.isCorrect ? '✅' : '❌') 
+                    : '⏱️';
+                html += `
+                    <div style="padding: 10px; margin: 5px 0; background: ${player.isCorrect ? '#e8f5e9' : '#ffebee'}; border-radius: 5px; display: flex; justify-content: space-between;">
+                        <span><strong>${index + 1}.</strong> ${player.username} ${statusIcon}</span>
+                        <span>Score: ${player.score} | Time: ${player.timeTaken}s</span>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            
+            leaderboardContainer.innerHTML = html;
+            leaderboardContainer.style.display = 'block';
+        }
+
+        // Handle Timeout
+        function handleTimeout() {
+            if (hasAnsweredCurrentQuestion) {
+                log('⚠️ Timeout but already answered', 'warning');
+                return;
+            }
+            
+            log('⏱️ Time expired - submitting timeout', 'warning');
+            const timeTaken = timeLimit; // Full time limit
+            submitAnswer(null, timeTaken, true);
+        }
+
+        // Submit Answer (Socket Event)
+        function submitAnswer(selectedOption, timeTakenOverride = null, isTimeout = false) {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
+            }
+            if (!currentQuestion || !currentRoom) return;
+            if (hasAnsweredCurrentQuestion && !isTimeout) {
+                log('⚠️ Already answered this question', 'warning');
+                return;
+            }
+
+            // Disable buttons
+            document.querySelectorAll('#optionsContainer button').forEach(btn => btn.disabled = true);
+            if (timerInterval) clearInterval(timerInterval);
+
+            const questionId = currentQuestion._id || currentQuestion.id;
+            const timeTaken = timeTakenOverride !== null 
+                ? timeTakenOverride 
+                : (questionStartTime ? Math.floor((Date.now() - questionStartTime) / 1000) : timeLimit - timeLeft);
+
+            log(`📝 Submitting answer via socket: ${selectedOption !== null ? selectedOption : 'TIMEOUT'} (Time: ${timeTaken}s)`, 'info');
+            
+            hasAnsweredCurrentQuestion = true;
+
+            socket.emit('answer:submit', {
+                questionId: questionId,
+                answer: selectedOption,
+                timeTaken: timeTaken
+            }, (response) => {
+                if (response && response.success) {
+                    log('✅ Answer submitted successfully', 'success');
+                    showStatus('gameStatus', 'Answer submitted! Waiting for others...', 'success');
+                } else {
+                    log('❌ Failed to submit: ' + (response?.error || 'Unknown error'), 'error');
+                    showStatus('gameStatus', 'Failed to submit answer', 'error');
+                    hasAnsweredCurrentQuestion = false; // Allow retry
+                }
+            });
+        }
+
+        // Move to Next Question
+        function moveToNextQuestion() {
+            currentQuestionIndex++;
+            hasAnsweredCurrentQuestion = false;
+            
+            if (currentQuestionIndex >= allQuestions.length) {
+                log('🏁 All questions completed!', 'success');
+                return;
+            }
+            
+            // Show next question
+            if (allQuestions[currentQuestionIndex]) {
+                showQuestion(allQuestions[currentQuestionIndex], 30);
+                showStatus('gameStatus', '', 'info');
+                const leaderboardContainer = document.getElementById('leaderboardContainer');
+                if (leaderboardContainer) {
+                    leaderboardContainer.style.display = 'none';
+                }
             }
         }
 

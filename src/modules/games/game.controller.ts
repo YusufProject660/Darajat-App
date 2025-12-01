@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import { AppError } from '../../utils/appError';
 import { GameRoom, IPlayer, IAnsweredQuestion } from './models/gameRoom.model';
 import { Deck } from './models/deck.model';
+import { DashboardGame } from '../dashboard/models/dashboard-game.model';
 import {gameService} from './services/game.service';
 import User from '../users/user.model';
 import { Question } from './models/question.model';
@@ -105,6 +106,7 @@ interface IGameRequest extends Request {
     categories: Record<string, boolean>;
     numberOfQuestions?: number;
     maximumPlayers?: number;
+    gameId?: string;
   };
   [key: string]: any;
 }
@@ -142,7 +144,25 @@ const createGame = async (req: IGameRequest, res: Response) => {
       return res.apiError('User not authenticated', 'UNAUTHORIZED');
     }
 
-    const { categories = {}, numberOfQuestions = 10, maximumPlayers = 4 } = req.body;
+    const { categories = {}, numberOfQuestions = 10, maximumPlayers = 4, gameId } = req.body;
+
+    // Validate gameId
+    if (!gameId) {
+      return res.apiError('Game ID is required', 'GAME_ID_REQUIRED');
+    }
+
+    // Find game by ID (from dashboard games collection)
+    const game = await DashboardGame.findOne({ id: gameId });
+    if (!game) {
+      logger.error('[createGame] 400: Game not found', { gameId });
+      return res.apiError('Game not found', 'GAME_NOT_FOUND');
+    }
+
+    // Check if game is available
+    if (game.status !== 'available') {
+      logger.error('[createGame] 400: Game not available', { gameId, status: game.status });
+      return res.apiError(`Game is ${game.status}`, 'GAME_NOT_AVAILABLE');
+    }
 
     if (typeof numberOfQuestions !== 'number' || numberOfQuestions < 1 || numberOfQuestions > 60) {
       return res.apiError('Number of questions must be between 1 and 60', 'INVALID_INPUT');
@@ -179,7 +199,7 @@ const createGame = async (req: IGameRequest, res: Response) => {
       return res.apiError('At least one category must be enabled', 'NO_CATEGORIES_ENABLED');
     }
 
-    // Get questions for the selected categories
+    // Get questions for the selected categories (purana system - no game filter)
     const questionPromises = enabledCategories.map(async ({ category, difficulty }) => {
       const decks = await Deck.find({
         $or: [
@@ -236,6 +256,7 @@ const createGame = async (req: IGameRequest, res: Response) => {
       const newRoom = new GameRoom({
         hostId: req.user._id,
         roomCode,
+        gameId: game.id, // Store gameId for join response
         settings: {
           categories: processedCategories,
           numberOfQuestions,
@@ -286,7 +307,19 @@ const createGame = async (req: IGameRequest, res: Response) => {
         populatedGame.settings.categories = Object.fromEntries(processedCategories);
       }
 
-      return res.apiSuccess(cleanGameResponse(populatedGame), 'Game created successfully');
+      // Add game details to response
+      const cleanedResponse = cleanGameResponse(populatedGame);
+      cleanedResponse.game = {
+        id: game.id,
+        name: game.title,
+        title: game.title,
+        image: game.image,
+        description: game.description,
+        status: game.status
+      };
+      cleanedResponse.maximumPlayers = maximumPlayers;
+
+      return res.apiSuccess(cleanedResponse, 'Game created successfully');
     } catch (error) {
       logger.error('Error in createGame:', error);
       return res.apiError('Failed to create game room', 'GAME_CREATION_FAILED');
@@ -372,6 +405,14 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
       });
       console.log('✅ [DB] Player added to room successfully!');
       console.log('📊 Total Players in Room:', updatedRoom.players?.length || 0);
+      console.log('🔍 [DEBUG] Updated Room Players:', JSON.stringify(updatedRoom.players?.map((p: any) => ({
+        userId: p.userId,
+        userIdType: typeof p.userId,
+        userIdString: p.userId?.toString?.(),
+        username: p.username,
+        isHost: p.isHost
+      })), null, 2));
+      console.log('🔍 [DEBUG] Host ID:', updatedRoom.hostId?.toString());
 
       // ⭐ STEP 4: SOCKET JOIN ROOM - DB entry ke baad socket se room join karo
       console.log('🔌 [SOCKET] Joining socket to room...');
@@ -383,6 +424,10 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
       console.log('📋 Active Rooms:', Array.from(userSocket.rooms));
       logger.info('✅ Socket joined room via API', { userId: userId.toString(), roomCode });
 
+      // Fetch fresh room data to ensure we have proper player structure
+      const freshRoom = await GameRoom.findOne({ roomCode: roomCode.trim().toUpperCase() }).lean() as any;
+      const hostIdForEvent = freshRoom?.hostId?.toString() || updatedRoom.hostId?.toString();
+      
       // Prepare player joined data
       const playerJoinedData = {
         player: {
@@ -391,16 +436,67 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
           username: username,
           avatar: avatar,
           score: 0,
-          isHost: updatedRoom.hostId?.toString() === userId.toString()
+          isHost: hostIdForEvent === userId.toString()
         },
-        players: updatedRoom.players.map((p: any) => ({
-          id: p.userId?.toString() || p.userId,
-          userId: p.userId?.toString() || p.userId,
-          username: p.username,
-          avatar: p.avatar,
-          score: p.score || 0,
-          isHost: p.isHost || false
-        }))
+        players: (freshRoom?.players || updatedRoom.players || []).map((p: any) => {
+          // Extract userId properly - handle ObjectId, string, or populated object
+          let playerUserId: string = '';
+          
+          // Try multiple ways to extract userId
+          if (p.userId) {
+            // If userId is ObjectId
+            if (p.userId.toString && typeof p.userId.toString === 'function') {
+              playerUserId = p.userId.toString();
+            }
+            // If userId is already string
+            else if (typeof p.userId === 'string') {
+              playerUserId = p.userId;
+            }
+            // If userId is object with _id
+            else if (p.userId._id) {
+              playerUserId = p.userId._id.toString();
+            }
+            // Last resort: convert to string
+            else {
+              playerUserId = String(p.userId);
+            }
+          }
+          
+          // If still empty, log for debugging
+          if (!playerUserId) {
+            console.log('⚠️ [WARNING] Could not extract userId for player:', {
+              username: p.username,
+              userId: p.userId,
+              userIdType: typeof p.userId,
+              _id: p._id
+            });
+          }
+          
+          // Check if player is host by comparing with hostId (ensure both are strings)
+          const hostIdStr = hostIdForEvent?.toString() || '';
+          let isHost = false;
+          
+          if (hostIdStr && playerUserId) {
+            // Compare both as strings (normalize both)
+            const normalizedPlayerId = playerUserId.toString().trim();
+            const normalizedHostId = hostIdStr.toString().trim();
+            isHost = normalizedPlayerId === normalizedHostId;
+          }
+          
+          // Fallback to p.isHost if hostId comparison didn't work
+          if (!isHost && p.isHost === true) {
+            isHost = true;
+          }
+          
+          return {
+            id: playerUserId || p._id?.toString() || '',
+            userId: playerUserId || p._id?.toString() || '', // Ensure userId is always included
+            username: p.username || '',
+            avatar: p.avatar || '',
+            score: p.score || 0,
+            isHost: isHost
+          };
+        })
       };
 
       console.log('📦 [DATA] Player joined data prepared:', {
@@ -472,10 +568,13 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
         .lean() as any;
 
       // Format players with is_me field
+      const hostId = populatedRoom?.hostId?.toString() || updatedRoom.hostId?.toString();
       const formattedPlayers = (populatedRoom?.players || []).map((p: any) => {
         const playerUserId = p.userId?._id?.toString() || p.userId?.toString() || p.userId;
         const currentUserId = userId.toString();
         const isMe = playerUserId === currentUserId;
+        // Check if player is host by comparing with hostId
+        const isHost = hostId && (playerUserId === hostId || p.isHost === true);
 
         return {
           userId: p.userId ? {
@@ -487,7 +586,7 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
           },
           username: p.username,
           avatar: p.avatar || '',
-          isHost: p.isHost || false,
+          isHost: isHost || false,
           is_me: isMe,
           _id: p._id?.toString() || p._id
         };
@@ -546,14 +645,41 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
         }
       }
 
-      return res.apiSuccess({
+      // Get game info if gameId exists
+      let gameInfo: any = null;
+      const roomGameId = populatedRoom?.gameId || updatedRoom.gameId;
+      if (roomGameId) {
+        const game = await DashboardGame.findOne({ id: roomGameId });
+        if (game) {
+          gameInfo = {
+            id: game.id,
+            name: game.title,
+            title: game.title,
+            image: game.image,
+            description: game.description,
+            status: game.status
+          };
+        }
+      }
+
+      const responseData: any = {
         roomCode: populatedRoom?.roomCode || updatedRoom.roomCode,
         categories: cleanedCategories,
         numberOfQuestions: populatedRoom?.settings?.numberOfQuestions || updatedRoom.settings?.numberOfQuestions,
         players: formattedPlayers,
         questions: formattedQuestions,
         status: populatedRoom?.status || updatedRoom.status
-      }, 'Game joined successfully');
+      };
+
+      // Add game info and maximumPlayers if available
+      if (gameInfo) {
+        responseData.game = gameInfo;
+      }
+      if (populatedRoom?.settings?.maximumPlayers || updatedRoom.settings?.maximumPlayers) {
+        responseData.maximumPlayers = populatedRoom?.settings?.maximumPlayers || updatedRoom.settings?.maximumPlayers;
+      }
+
+      return res.apiSuccess(responseData, 'Game joined successfully');
     } catch (error: any) {
       if (error.message === 'Room not found') {
         return res.apiError('Game room not found', 'ROOM_NOT_FOUND');
@@ -630,18 +756,6 @@ interface IGetQuestionsRequest extends Request {
   };
   user?: IUser;
 }
-
-// Submit answer request interface
-interface ISubmitAnswerRequest extends Request {
-  body: {
-    roomCode: string;
-    questionId: string;
-    selectedOption: number;
-    timeTaken: number;
-  };
-  user?: IUser;
-}
-
 
 /**
  * @desc    Get all questions for a game room
@@ -902,11 +1016,56 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
       });
     }
 
-    if (gameRoom.status !== 'finished') {
+    // Allow leaderboard for active games if all questions are answered
+    if (gameRoom.status !== 'finished' && gameRoom.status !== 'active') {
       return res.status(200).json({
         status: 0,
         message: 'Leaderboard not available. The game room was not found or the game is not yet complete.'
       });
+    }
+
+    // For active games, check if all questions are answered
+    if (gameRoom.status === 'active') {
+      const totalQuestions = gameRoom.questions?.length || 0;
+      if (totalQuestions === 0) {
+        return res.status(200).json({
+          status: 0,
+          message: 'Leaderboard not available. No questions in this game.'
+        });
+      }
+
+      // For active games, show leaderboard if at least one player has answered all questions
+      // Use unique question IDs to avoid counting duplicates
+      const playersWithAllAnswers = gameRoom.players.filter((player: any) => {
+        if (!player.userId) return false;
+        
+        const playerAnswers = gameRoom.answeredQuestions?.filter(
+          (aq: any) => aq.playerId && aq.playerId.toString() === player.userId.toString()
+        ) || [];
+        
+        // Get unique question IDs answered by this player
+        const uniqueQuestionIds = new Set(
+          playerAnswers.map((aq: any) => aq.questionId?.toString()).filter(Boolean)
+        );
+        
+        // Check if player has answered all unique questions
+        const hasAllQuestions = uniqueQuestionIds.size === totalQuestions;
+        
+        // Log for debugging
+        logger.info(`Player ${player.userId.toString()}: answered ${uniqueQuestionIds.size}/${totalQuestions} unique questions`);
+        
+        return hasAllQuestions;
+      });
+
+      // Log for debugging
+      logger.info(`Leaderboard check for room ${roomCode}: totalQuestions=${totalQuestions}, playersWithAllAnswers=${playersWithAllAnswers.length}, totalAnswers=${gameRoom.answeredQuestions?.length || 0}`);
+
+      // If no player has completed all questions, still show leaderboard with current progress
+      // Frontend calls this after game completion, so we should allow it
+      if (playersWithAllAnswers.length === 0) {
+        logger.info(`No players completed all questions for room ${roomCode}, but showing leaderboard with current progress`);
+        // Continue to show leaderboard - don't block it
+      }
     }
 
     const userId = req.user!._id.toString();
@@ -987,8 +1146,11 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
       username: player.username,
       avatar: player.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(player.username)}&background=random`,
       points: player.points,
+      score: player.points, // Alias for backward compatibility
       accuracy: player.accuracy,
-      averageTime: player.averageTime
+      averageTime: player.averageTime,
+      correctAnswers: player.correctAnswers,
+      totalQuestionsAnswered: player.totalQuestionsAnswered
     }));
 
     return res.status(200).json({
@@ -1285,256 +1447,7 @@ const finishGame = async (req: IFinishGameRequest, res: Response) => {
   }
 };
 
-// Submit answer implementation
- const submitAnswer = async (req: ISubmitAnswerRequest, res: Response) => {
-  try {
-    const { roomCode, questionId, selectedOption, timeTaken } = req.body;
-    const userId = req.user?._id;
 
-    if (!userId) {
-      return res.apiError('User not authenticated', 'UNAUTHORIZED');
-    }
-
-    try {
-      // Find the game room and question
-      const [gameRoom, question] = await Promise.all([
-        GameRoom.findOne({ roomCode }),
-        Question.findById(questionId)
-      ]);
-
-      if (!gameRoom) {
-        return res.status(200).json({
-          status: 0,
-          message: 'Game room not found'
-        });
-      }
-
-      if (!question) {
-        return res.status(200).json({
-          status: 0,
-          message: 'Question not found'
-        });
-      }
-
-      // Check if game is active
-      if (gameRoom.status !== 'active') {
-        return res.status(200).json({
-          status: 0,
-          message: 'Game is not active'
-        });
-      }
-
-      // Check if user is a player in this game
-      const player = gameRoom.players.find(
-        (p: any) => p.userId.toString() === userId.toString()
-      );
-
-      if (!player) {
-        return res.status(200).json({
-          status: 0,
-          message: 'You are not a player in this game'
-        });
-      }
-
-      // Check if already answered this question
-      const alreadyAnswered = gameRoom.answeredQuestions.some(
-        (aq: any) => 
-          aq.playerId.toString() === userId.toString() && 
-          aq.questionId.toString() === questionId
-      );
-
-      if (alreadyAnswered) {
-        return res.status(200).json({
-          status: 0,
-          message: 'You have already answered this question'
-        });
-      }
-
-      // Check if answer is correct
-      const isCorrect = question.correctAnswer === selectedOption;
-      const points = isCorrect ? 10 : 0;
-
-      // Update player score
-      player.score += points;
-
-      gameRoom.answeredQuestions.push({
-        playerId: userId,
-        questionId,
-        selectedOption,
-        isCorrect,
-        timeTaken,
-        answeredAt: new Date()
-      });
-
-      await gameRoom.save();
-
-      const io = (req as any).app?.get('io');
-      if (io) {
-        io.to(roomCode).emit('question:answered', {
-          playerId: userId.toString(),
-          isCorrect,
-          correctAnswer: question.correctAnswer,
-          score: player.score
-        });
-      }
-
-      const allPlayersAnswered = gameRoom.players.every((p: IPlayer) =>
-        gameRoom.answeredQuestions.some((aq: IAnsweredQuestion) =>
-          aq.playerId.toString() === p.userId.toString() &&
-          aq.questionId.toString() === questionId
-        )
-      );
-
-      if (allPlayersAnswered) {
-        const nextQuestionIndex = (gameRoom.currentQuestion || 0) + 1;
-        if (nextQuestionIndex < gameRoom.questions.length) {
-          gameRoom.currentQuestion = nextQuestionIndex;
-          await gameRoom.save();
-          
-          const nextQuestion = await Question.findById(gameRoom.questions[nextQuestionIndex]);
-          if (io && nextQuestion) {
-            const timeLimit = nextQuestion.difficulty === 'hard' ? 45 : nextQuestion.difficulty === 'medium' ? 30 : 20;
-            io.to(roomCode).emit('question:new', {
-              question: {
-                id: (nextQuestion._id as any).toString(),
-                question: nextQuestion.question,
-                options: nextQuestion.options,
-                category: nextQuestion.category,
-                difficulty: nextQuestion.difficulty
-              },
-              questionIndex: nextQuestionIndex,
-              totalQuestions: gameRoom.questions.length,
-              timeLimit
-            });
-          }
-        } else {
-          gameRoom.status = 'finished';
-          gameRoom.finishedAt = new Date();
-          await gameRoom.save();
-          
-          if (io) {
-            io.to(roomCode).emit('game:ended', {
-              leaderboard: gameRoom.players
-                .sort((a: IPlayer, b: IPlayer) => (b.score || 0) - (a.score || 0))
-                .map((p: IPlayer) => ({
-                  id: p.userId.toString(),
-                  name: p.username,
-                  score: p.score || 0,
-                  isHost: p.isHost
-                })),
-              totalQuestions: gameRoom.questions.length,
-              players: gameRoom.players.map((p: IPlayer) => ({
-                id: p.userId.toString(),
-                username: p.username,
-                score: p.score || 0,
-                isHost: p.isHost
-              }))
-            });
-          }
-        }
-      }
-
-      return res.status(200).json({
-        status: 1,
-        message: 'Answer submitted successfully',
-        data: {
-          isCorrect,
-          correctAnswer: question.correctAnswer,
-          score: player.score,
-          explanation: question.explanation || ''
-        }
-      });
-    } catch (error) {
-      throw error;
-    }
-  } catch (error: any) {
-    return res.status(200).json({
-      status: 0,
-      message: error.message || 'Failed to submit answer'
-    });
-  }
-};
-
-// Explicitly export all functions
-// @desc    Start a game
-// @route   POST /api/game/:roomCode/start
-// @access  Private (Host only)
-const startGame = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { roomCode } = req.params;
-    const userId = (req as any).user?._id;
-
-    const game = await GameRoom.findOne({ roomCode }).populate('questions');
-    if (!game) {
-      return res.apiError('Game room not found', 'ROOM_NOT_FOUND');
-    }
-
-    const isHost = game.players.some(
-      (p: IPlayer) => p.userId.toString() === userId.toString() && p.isHost
-    );
-
-    if (!isHost) {
-      return res.apiError('Only the host can start the game', 'NOT_HOST');
-    }
-
-    const allPlayersReady = game.players.every((player: IPlayer) => player.isReady || player.isHost);
-    if (!allPlayersReady) {
-      return res.apiError('All players must be ready before starting the game', 'PLAYERS_NOT_READY');
-    }
-
-    if (game.players.length < 2) {
-      return res.apiError('At least 2 players are required to start the game', 'INSUFFICIENT_PLAYERS');
-    }
-
-    const updatedGame = await gameService.startGame(game.roomCode, userId);
-    if (!updatedGame) {
-      return res.apiError('Failed to start game', 'START_GAME_ERROR');
-    }
-
-    const populatedGame = await GameRoom.findOne({ roomCode })
-      .populate('questions')
-      .populate('players.userId', 'username avatar')
-      .lean() as any;
-
-    const firstQuestion = populatedGame?.questions?.[0] ? {
-      _id: populatedGame.questions[0]._id?.toString(),
-      question: populatedGame.questions[0].question,
-      options: populatedGame.questions[0].options,
-      category: populatedGame.questions[0].category,
-      difficulty: populatedGame.questions[0].difficulty
-    } : null;
-
-    const timeLimit = firstQuestion?.difficulty === 'hard' ? 45 : firstQuestion?.difficulty === 'medium' ? 30 : 20;
-
-    const io = (req as any).app?.get('io');
-    if (io) {
-      io.to(roomCode).emit('game:started', {
-        firstQuestion,
-        timeLimit,
-        totalQuestions: populatedGame?.questions?.length || 0
-      });
-    }
-
-    return res.status(200).json({
-      status: 1,
-      message: 'Game started successfully',
-      data: {
-        game: {
-          id: populatedGame?._id?.toString(),
-          roomCode: populatedGame?.roomCode,
-          status: 'active',
-          playerCount: populatedGame?.players?.length || 0,
-          questionCount: populatedGame?.questions?.length || 0,
-          currentQuestion: 0
-        },
-        firstQuestion,
-        totalQuestions: populatedGame?.questions?.length || 0
-      }
-    });
-  } catch (error) {
-    return next(error);
-  }
-};
 
 // @desc    Kick a player from the game
 // @route   POST /api/game/:roomCode/players/:playerId/kick
@@ -1937,11 +1850,9 @@ export {
   joinGame,
   leaveGame,
   getQuestions,
-  submitAnswer,
   getGameSummary,
   getGameLeaderboard,
   finishGame,
-  startGame,
   kickPlayer,
   updateGameSettings,
   getGameLobby,

@@ -21,6 +21,7 @@ export interface IAnsweredQuestion {
 export interface IGameRoom extends Document {
   hostId: mongoose.Types.ObjectId;
   roomCode: string;
+  gameId?: string; // Game ID from DashboardGame (e.g., "trivia_rush")
   players: IPlayer[];
   settings: {
     numberOfQuestions: number;
@@ -71,6 +72,7 @@ const playerSchema = new Schema<IPlayer>({
 const gameRoomSchema = new Schema<IGameRoom>({
   hostId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   roomCode: { type: String, required: true, unique: true, uppercase: true },
+  gameId: { type: String, required: false }, // Game ID from DashboardGame
   players: [playerSchema],
   settings: {
     numberOfQuestions: { type: Number, required: true, min: 1, max: 10 },

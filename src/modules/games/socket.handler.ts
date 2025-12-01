@@ -5,6 +5,7 @@ import { config } from '../../config/env';
 import User from '../users/user.model';
 import { gameService } from './services/game.service';
 import { GameRoom } from './models/gameRoom.model';
+import { Question } from './models/question.model';
 import { ClientEvents, InterServerEvents, ServerEvents, SocketData } from './types/game.types';
 import { logger } from '../../utils/logger';
 import { bufferManager } from './utils/bufferManager';
@@ -291,6 +292,7 @@ async function handleJoinRoom(
       console.log('👥 [RECEIVERS] Receiver IDs:', receiverIds);
       console.log('📊 [RECEIVERS] Receiver Count:', receiverIds.length);
 
+      const hostIdForEvent = room.hostId?.toString();
       const playerJoinedData = {
         player: {
           id: userId,
@@ -298,16 +300,38 @@ async function handleJoinRoom(
           username: username,
           avatar: socketData.user.avatar,
           score: 0,
-          isHost: room.hostId?.toString() === userId || isHost || false
+          isHost: hostIdForEvent === userId || isHost || false
         },
-        players: (room.players || []).map((p: any) => ({
-          id: p.userId?.toString() || p.userId || p.id,
-          userId: p.userId?.toString() || p.userId || p.id,
-          username: p.username,
-          avatar: p.avatar,
-          score: p.score || 0,
-          isHost: p.isHost || false
-        }))
+        players: (room.players || []).map((p: any) => {
+          // Extract userId properly - handle ObjectId, string, or populated object
+          let playerUserId: string;
+          if (p.userId?._id) {
+            playerUserId = p.userId._id.toString();
+          } else if (p.userId?.toString) {
+            playerUserId = p.userId.toString();
+          } else if (typeof p.userId === 'string') {
+            playerUserId = p.userId;
+          } else {
+            playerUserId = p.id || '';
+          }
+          
+          // Check if player is host by comparing with hostId (ensure both are strings)
+          const hostIdStr = hostIdForEvent?.toString() || '';
+          const isHostPlayer = hostIdStr && (
+            playerUserId === hostIdStr || 
+            playerUserId.toString() === hostIdStr ||
+            p.isHost === true
+          );
+          
+          return {
+            id: playerUserId,
+            userId: playerUserId, // Ensure userId is always included
+            username: p.username,
+            avatar: p.avatar || '',
+            score: p.score || 0,
+            isHost: !!isHostPlayer // Convert to boolean explicitly
+          };
+        })
       };
 
       console.log('📦 [DATA] Player joined data prepared:', {
@@ -407,12 +431,71 @@ async function handleJoinRoom(
 }
 
 /**
+ * Prepare leaderboard data for a specific question
+ */
+async function prepareQuestionLeaderboard(
+  roomCode: string,
+  questionId: string
+): Promise<{
+  leaderboard: Array<{
+    playerId: string;
+    username: string;
+    avatar?: string;
+    hasAnswered: boolean;
+    isCorrect: boolean;
+    selectedOption: number | null;
+    score: number;
+    timeTaken: number;
+  }>;
+  correctAnswer: number;
+  totalPlayers: number;
+  answeredPlayers: number;
+}> {
+  const room = await GameRoom.findOne({ roomCode });
+  if (!room) {
+    throw new Error('Room not found');
+  }
+
+  const question = await Question.findById(questionId);
+  const correctAnswer = question?.correctAnswer ?? 0;
+
+  const leaderboard = room.players.map((player: any) => {
+    // Find answer for this player and question
+    const answer = room.answeredQuestions?.find((aq: any) =>
+      aq.playerId.toString() === player.userId.toString() &&
+      aq.questionId.toString() === questionId
+    );
+
+    return {
+      playerId: player.userId.toString(),
+      username: player.username,
+      avatar: player.avatar,
+      hasAnswered: !!answer,
+      isCorrect: answer?.isCorrect || false,
+      selectedOption: answer?.selectedOption ?? null,
+      score: player.score || 0,
+      timeTaken: answer?.timeTaken || 0
+    };
+  });
+
+  // Sort by score (descending)
+  leaderboard.sort((a: any, b: any) => b.score - a.score);
+
+  return {
+    leaderboard,
+    correctAnswer,
+    totalPlayers: room.players.length,
+    answeredPlayers: leaderboard.filter((p: any) => p.hasAnswered).length
+  };
+}
+
+/**
  * Handle answer submission
  */
 async function handleSubmitAnswer(
   io: SocketIOServer,
   socket: Socket<ClientEvents, ServerEvents, InterServerEvents, SocketData>,
-  data: { questionId: string; answer: any },
+  data: { questionId: string; answer: any; timeTaken?: number },
   callback?: (response: { success: boolean; error?: string; data?: any }) => void
 ) {
   try {
@@ -422,7 +505,7 @@ async function handleSubmitAnswer(
       return callback?.({ success: false, error: 'Socket not authenticated' });
     }
     
-    const { questionId, answer } = data;
+    const { questionId, answer, timeTaken = 0 } = data;
     const roomCode = socketData.roomCode;
     const playerId = socketData.playerId || socketData.user.id;
     
@@ -433,14 +516,52 @@ async function handleSubmitAnswer(
       });
     }
 
-    const result = await gameService.submitAnswer(roomCode, playerId, questionId, answer);
+    const result = await gameService.submitAnswer(roomCode, playerId, questionId, answer, timeTaken);
     
-    // Notify all players about the answer
-    io.to(roomCode).emit('question:answered', {
+    // Get question to get correctAnswer
+    const question = await Question.findById(questionId);
+    const correctAnswer = question?.correctAnswer?.toString() || '';
+    
+    // Get all receivers (except sender)
+    const socketsInRoom = await io.in(roomCode).fetchSockets();
+    const receiverIds = socketsInRoom
+      .filter(s => s.data?.user?.id && s.data.user.id !== playerId)
+      .map(s => s.data.user.id);
+
+    const answerData = {
       playerId,
       isCorrect: result.correct,
+      correctAnswer: correctAnswer,
       score: result.score
-    });
+    };
+
+    // Create buffer if there are receivers
+    if (receiverIds.length > 0) {
+      const taskId = await bufferManager.createBuffer(
+        roomCode,
+        playerId,
+        'question:answered',
+        answerData,
+        receiverIds
+      );
+
+      // Broadcast with taskId (except sender)
+      socket.to(roomCode).emit('question:answered', {
+        ...answerData,
+        taskId,
+        senderId: playerId
+      } as any);
+    } else {
+      // No receivers, normal emit (except sender)
+      socket.to(roomCode).emit('question:answered', answerData);
+    }
+    
+    // If all players answered, emit signal
+    if (result.allPlayersAnswered) {
+      io.to(roomCode).emit('all:answered', {
+        questionId: questionId
+      });
+    }
     
     callback?.({ 
       success: true, 
@@ -568,21 +689,38 @@ async function handleLeaveRoom(
         isHost: p.isHost || false
       }));
 
-      console.log('📤 [EMIT] Broadcasting player:removed event...');
-      console.log('📋 Event Data:', {
+      const removedData = {
         playerId: userId,
-        reason: 'left',
-        remainingPlayers: playersList.length,
-        newHostId: newHostId || 'None'
-      });
-
-      io.to(roomCode).emit('player:removed', {
-        playerId: userId,
-        reason: 'left',
+        reason: 'left' as const,
         players: playersList,
         newHostId,
         roomCode
-      } as any);
+      };
+
+      // Get receivers (all remaining players - leaving player already left room, but filter for safety)
+      const remainingSockets = await io.in(roomCode).fetchSockets();
+      const receiverIds = remainingSockets
+        .filter(s => s.data?.user?.id && s.data.user.id !== userId) // Exclude leaving player
+        .map(s => s.data.user.id);
+
+      // Create buffer if receivers exist
+      if (receiverIds.length > 0) {
+        const taskId = await bufferManager.createBuffer(
+          roomCode,
+          userId,
+          'player:removed',
+          removedData,
+          receiverIds
+        );
+        // Use socket.to() to explicitly exclude the leaving player (already left, but extra safety)
+        socket.to(roomCode).emit('player:removed', {
+          ...removedData,
+          taskId,
+          senderId: userId
+        } as any);
+      } else {
+        socket.to(roomCode).emit('player:removed', removedData as any);
+      }
 
       console.log('✅ [EMIT] player:removed event sent to', room.players.length, 'remaining players');
       console.log('✅ [SUCCESS] Player left room successfully');
@@ -728,19 +866,37 @@ async function handleKickPlayer(
         isHost: p.isHost || false
       }));
 
-      console.log('📤 [EMIT] Broadcasting player:removed event to room...');
-      console.log('📋 Event Data:', {
-        playerId: playerId,
-        reason: 'kicked',
-        remainingPlayers: playersList.length
-      });
-
-      io.to(roomCode).emit('player:removed', {
+      const removedData = {
         playerId,
-        reason: 'kicked',
+        reason: 'kicked' as const,
         players: playersList,
         roomCode
-      } as any);
+      };
+
+      // Get receivers (all remaining players except kicked player and host)
+      // Note: Kicked player already left room, but filter for safety
+      const receiverIds = socketsInRoom
+        .filter(s => s.data?.user?.id && s.data.user.id !== playerId && s.data.user.id !== currentUserId)
+        .map(s => s.data.user.id);
+
+      // Create buffer if receivers exist
+      if (receiverIds.length > 0) {
+        const taskId = await bufferManager.createBuffer(
+          roomCode,
+          currentUserId,
+          'player:removed',
+          removedData,
+          receiverIds
+        );
+        // Use socket.to() to explicitly exclude kicked player (already left, but extra safety)
+        socket.to(roomCode).emit('player:removed', {
+          ...removedData,
+          taskId,
+          senderId: currentUserId
+        } as any);
+      } else {
+        socket.to(roomCode).emit('player:removed', removedData as any);
+      }
 
       console.log('✅ [EMIT] player:removed event sent to', room.players.length, 'remaining players');
       console.log('✅ [SUCCESS] Player kicked successfully');
@@ -874,9 +1030,132 @@ export function setupSocketHandlers(io: SocketIOServer<ClientEvents, ServerEvent
       await handleKickPlayer(io, socket, data, callback);
     });
 
-    // Handle answer submission
-    socket.on('answer:submit' as any, async (data: { questionId: string; answer: any }, callback?: (response: { success: boolean; error?: string; data?: any }) => void) => {
+    // Handle game start (host only)
+    socket.on('game:start' as any, async (data?: any, callback?: (response: { success: boolean; error?: string; data?: any }) => void) => {
+      try {
+        // Handle case where callback is passed as first parameter (no data)
+        if (typeof data === 'function') {
+          callback = data;
+          data = {};
+        }
+
+        const socketData = socket.data;
+        if (!socketData || !socketData.user) {
+          return callback?.({ success: false, error: 'Socket not authenticated' });
+        }
+
+        const userId = socketData.user.id;
+        const roomCode = socketData.roomCode;
+
+        if (!roomCode) {
+          return callback?.({ success: false, error: 'Not in a room' });
+        }
+
+        const game = await GameRoom.findOne({ roomCode });
+        if (!game) {
+          return callback?.({ success: false, error: 'Game room not found' });
+        }
+
+        const isHost = game.players.some(
+          (p: any) => p.userId.toString() === userId && p.isHost
+        );
+
+        if (!isHost) {
+          return callback?.({ success: false, error: 'Only the host can start the game' });
+        }
+
+        if (game.status !== 'waiting') {
+          return callback?.({ success: false, error: `Game is already started ${game.status}` });
+        }
+
+        if (game.players.length < 2) {
+          return callback?.({ success: false, error: 'At least 2 players are required to start the game' });
+        }
+
+        const updatedGame = await gameService.startGame(roomCode, userId);
+        if (!updatedGame) {
+          return callback?.({ success: false, error: 'Failed to start game' });
+        }
+
+        io.to(roomCode).emit('game:started', {
+          totalQuestions: game.questions?.length || 0
+        });
+
+        callback?.({ success: true, data: { roomCode, status: 'active' } });
+      } catch (error: any) {
+        logger.error('Error starting game via socket', { error: error.message });
+        callback?.({ success: false, error: error.message || 'Failed to start game' });
+      }
+    });
+
+    // Handle answer submission (including timeout - null answer means timeout)
+    socket.on('answer:submit' as any, async (data: { questionId: string; answer: any; timeTaken?: number }, callback?: (response: { success: boolean; error?: string; data?: any }) => void) => {
       await handleSubmitAnswer(io, socket, data, callback);
+    });
+
+    // Handle question leaderboard request
+    socket.on('question:leaderboard' as any, async (data: { questionId: string }, callback?: (response: { success: boolean; error?: string; data?: any }) => void) => {
+      try {
+        const socketData = socket.data;
+        if (!socketData || !socketData.user) {
+          return callback?.({ success: false, error: 'Socket not authenticated' });
+        }
+
+        const { questionId } = data;
+        const roomCode = socketData.roomCode;
+        const playerId = socketData.playerId || socketData.user.id;
+
+        if (!roomCode || !playerId) {
+          return callback?.({ success: false, error: 'Not in a room or player ID not found' });
+        }
+
+        // Prepare leaderboard data
+        const leaderboardData = await prepareQuestionLeaderboard(roomCode, questionId);
+        
+        // Get all receivers (except sender)
+        const socketsInRoom = await io.in(roomCode).fetchSockets();
+        const receiverIds = socketsInRoom
+          .filter(s => s.data?.user?.id && s.data.user.id !== playerId)
+          .map(s => s.data.user.id);
+
+        const leaderboardPayload = {
+          questionId: questionId,
+          leaderboard: leaderboardData.leaderboard,
+          correctAnswer: leaderboardData.correctAnswer,
+          totalPlayers: leaderboardData.totalPlayers,
+          answeredPlayers: leaderboardData.answeredPlayers
+        };
+
+        // Create buffer if there are receivers
+        if (receiverIds.length > 0) {
+          const taskId = await bufferManager.createBuffer(
+            roomCode,
+            playerId,
+            'question:leaderboard',
+            leaderboardPayload,
+            receiverIds
+          );
+
+          // Broadcast with taskId (except sender)
+          socket.to(roomCode).emit('question:leaderboard', {
+            ...leaderboardPayload,
+            taskId,
+            senderId: playerId
+          } as any);
+        } else {
+          // No receivers, normal emit (except sender)
+          socket.to(roomCode).emit('question:leaderboard', leaderboardPayload);
+        }
+
+        // Send to requester as well (without buffer)
+        callback?.({ 
+          success: true, 
+          data: leaderboardPayload 
+        });
+      } catch (error: any) {
+        logger.error('Error getting question leaderboard', { error: error.message });
+        callback?.({ success: false, error: error.message || 'Failed to get leaderboard' });
+      }
     });
 
     // Handle message acknowledgment

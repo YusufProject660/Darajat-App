@@ -22,4 +22,4 @@ const dashboardGameSchema = new Schema<IDashboardGame>({
 }, { timestamps: true });
 
 export const DashboardGame = mongoose.models.DashboardGame || 
-  mongoose.model<IDashboardGame>('Game', dashboardGameSchema, 'games');
+  mongoose.model<IDashboardGame>('DashboardGame', dashboardGameSchema, 'games');

@@ -4,6 +4,8 @@ import { Socket } from 'socket.io';
 import { Model, Types } from 'mongoose';
 import { GameRoom, IGameRoom, IPlayer, IAnsweredQuestion } from '../models/gameRoom.model';
 import { Question } from '../models/question.model';
+import { GameHistory } from '../models/gameHistory.model';
+import User from '../../users/user.model';
 import { logger } from '../../../utils/logger';
 
 // Extend the IGameService interface to include our methods
@@ -26,8 +28,9 @@ interface IGameService {
     roomCode: string, 
     userId: string, 
     questionId: string, 
-    answer: any
-  ): Promise<{ correct: boolean; score: number }>;
+    answer: any,
+    timeTaken?: number
+  ): Promise<{ correct: boolean; score: number; allPlayersAnswered: boolean }>;
   getGameState(roomCode: string, forceRefresh?: boolean): Promise<IGameRoom | null>;
   cleanup(): Promise<void>;
 }
@@ -258,14 +261,8 @@ class GameService implements IGameService {
         throw new Error(`Game is already ${room.status}`);
       }
 
-      if (!room.players || room.players.length < 1) {
-        throw new Error('Cannot start a game without players');
-      }
-
-      // Check if all players are ready
-      const allReady = room.players.every(player => player.isReady);
-      if (!allReady) {
-        throw new Error('All players must be ready to start the game');
+      if (!room.players || room.players.length < 2) {
+        throw new Error('At least 2 players are required to start the game');
       }
 
       // Update room status
@@ -448,113 +445,187 @@ class GameService implements IGameService {
     roomCode: string,
     userId: string,
     questionId: string,
-    answer: any
-  ): Promise<{ correct: boolean; score: number }> {
-    const session = await this.gameRoomModel.startSession();
-    session.startTransaction();
+    answer: any,
+    timeTaken: number = 0
+  ): Promise<{ correct: boolean; score: number; allPlayersAnswered: boolean }> {
+    const maxRetries = 3;
+    let retryCount = 0;
 
-    try {
-      const room = await this.gameRoomModel.findOne({ roomCode }).session(session);
-      if (!room) {
-        throw new Error('Room not found');
-      }
-
-      if (room.status !== 'active') {
-        throw new Error('Game is not active');
-      }
-
-      const player = room.players.find(p => p.userId.toString() === userId);
-      if (!player) {
-        throw new Error('Player not found in room');
-      }
-
-      // Check if player has already answered this question
-      const existingAnswer = room.answeredQuestions?.find(
-        aq => aq.playerId.toString() === userId && aq.questionId.toString() === questionId
-      );
-
-      if (existingAnswer) {
-        throw new Error('You have already answered this question');
-      }
-
-      // Validate answer against question
-      const question = await Question.findById(questionId).session(session);
-      if (!question) {
-        throw new Error('Question not found');
-      }
-      const isCorrect = question.correctAnswer === answer;
-      const pointsEarned = isCorrect ? 10 : 0;
-      
-      // Update player score
-      player.score += pointsEarned;
-
-      // Record the answer
-      const answeredQuestion: IAnsweredQuestion = {
-        playerId: new Types.ObjectId(userId),
-        questionId: new Types.ObjectId(questionId),
-        selectedOption: answer,
-        isCorrect,
-        timeTaken: 0, // In a real app, track time taken
-        answeredAt: new Date()
-      };
-
-      if (!room.answeredQuestions) {
-        room.answeredQuestions = [];
-      }
-      room.answeredQuestions.push(answeredQuestion);
-
-      // Move to next question if all players have answered
-      const allPlayersAnswered = room.players.every(p => 
-        room.answeredQuestions?.some(aq => 
-          aq.playerId.toString() === p.userId.toString() && 
-          aq.questionId.toString() === questionId
-        )
-      );
-
-      if (allPlayersAnswered && room.currentQuestion !== undefined) {
-        room.currentQuestion++;
-        
-        // Check if game is over
-        if (room.currentQuestion >= (room.questions?.length || 0)) {
-          room.status = 'finished';
-          room.finishedAt = new Date();
-          
-          // Calculate final scores and results
-          room.results = room.players.map(player => ({
-            userId: new Types.ObjectId(player.userId.toString()),
-            correctAnswers: room.answeredQuestions?.filter(aq => 
-              aq.playerId.toString() === player.userId.toString() && aq.isCorrect
-            ).length || 0,
-            totalTime: 0 // In a real app, track total time
-          }));
+    while (retryCount < maxRetries) {
+      try {
+        // Validate question first
+        const question = await Question.findById(questionId);
+        if (!question) {
+          throw new Error('Question not found');
         }
-      }
 
-      await room.save({ session });
-      await session.commitTransaction();
+        // Handle timeout case (null answer) - use -1 for no answer
+        const selectedOption = answer === null ? -1 : answer;
+        const isCorrect = answer !== null && question.correctAnswer === answer;
+        const pointsEarned = isCorrect ? 10 : 0;
 
-      // Broadcast update to all clients in the room
-      if (this.io) {
-        this.io.to(roomCode).emit('answer:submitted', {
-          success: true,
-          data: {
-            playerId: userId,
-            questionId,
-            isCorrect,
-            score: player.score,
-            room
+        // Prepare the answer document
+        const answeredQuestion = {
+          playerId: new Types.ObjectId(userId),
+          questionId: new Types.ObjectId(questionId),
+          selectedOption: selectedOption,
+          isCorrect,
+          timeTaken: timeTaken,
+          answeredAt: new Date()
+        };
+
+        // Atomic update: Check duplicate, push answer, increment score
+        // This prevents write conflicts by using atomic operations
+        const room = await this.gameRoomModel.findOneAndUpdate(
+          {
+            roomCode,
+            status: 'active',
+            'players.userId': new Types.ObjectId(userId),
+            answeredQuestions: {
+              $not: {
+                $elemMatch: {
+                  playerId: new Types.ObjectId(userId),
+                  questionId: new Types.ObjectId(questionId)
+                }
+              }
+            }
+          },
+          {
+            $push: { answeredQuestions: answeredQuestion },
+            $inc: { 'players.$[player].score': pointsEarned }
+          },
+          {
+            arrayFilters: [{ 'player.userId': new Types.ObjectId(userId) }],
+            new: true
           }
-        });
-      }
+        );
 
-      return { correct: isCorrect, score: player.score };
-    } catch (error) {
-      await session.abortTransaction();
-      logger.error(`Error submitting answer in room ${roomCode}:`, error);
-      throw error;
-    } finally {
-      session.endSession();
+        if (!room) {
+          // Check if already answered or room not found
+          const checkRoom = await this.gameRoomModel.findOne({ roomCode });
+          if (!checkRoom) {
+            throw new Error('Room not found');
+          }
+          if (checkRoom.status !== 'active') {
+            throw new Error('Game is not active');
+          }
+          
+          const existingAnswer = checkRoom.answeredQuestions?.find(
+            (aq: any) => aq.playerId.toString() === userId && aq.questionId.toString() === questionId
+          );
+          if (existingAnswer) {
+            throw new Error('You have already answered this question');
+          }
+          
+          throw new Error('Player not found in room');
+        }
+
+        // Get updated player score
+        const player = room.players.find((p: any) => p.userId.toString() === userId);
+        const finalScore = player?.score || 0;
+
+        // Check if all players have answered
+        const allPlayersAnswered = room.players.every((p: any) => 
+          room.answeredQuestions?.some((aq: any) => 
+            aq.playerId.toString() === p.userId.toString() && 
+            aq.questionId.toString() === questionId
+          )
+        );
+
+        return { correct: isCorrect, score: finalScore, allPlayersAnswered };
+      } catch (error: any) {
+        // Retry on write conflict or duplicate key error
+        if (error.message?.includes('Write conflict') || 
+            error.message?.includes('E11000') ||
+            error.code === 11000) {
+          retryCount++;
+          if (retryCount < maxRetries) {
+            const delay = Math.pow(2, retryCount) * 50; // Exponential backoff: 100ms, 200ms, 400ms
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+        }
+        
+        logger.error(`Error submitting answer in room ${roomCode}:`, error);
+        throw error;
+      }
     }
+
+    throw new Error('Failed to submit answer after retries');
+  }
+
+  /**
+   * Archive game history before cleanup
+   */
+  private async archiveGameHistory(room: IGameRoom): Promise<void> {
+    if (!room.answeredQuestions?.length) return;
+
+    const playerHistory = room.players.map(player => {
+      const answers = room.answeredQuestions.filter(aq => aq.playerId.toString() === player.userId.toString());
+      const correct = answers.filter(a => a.isCorrect).length;
+      const totalTime = answers.reduce((sum, a) => sum + a.timeTaken, 0);
+      
+      return {
+        userId: player.userId,
+        username: player.username,
+        avatar: player.avatar,
+        finalScore: player.score,
+        correctAnswers: correct,
+        totalTime,
+        accuracy: answers.length > 0 ? Math.round((correct / answers.length) * 100) : 0
+      };
+    });
+
+    await GameHistory.create({
+      roomCode: room.roomCode,
+      hostId: room.hostId,
+      players: playerHistory,
+      questions: room.questions,
+      answeredQuestions: room.answeredQuestions,
+      settings: room.settings,
+      startedAt: room.createdAt,
+      finishedAt: room.finishedAt || new Date()
+    });
+
+    logger.info(`Game history archived for room ${room.roomCode}`);
+  }
+
+  /**
+   * Update player stats after game
+   */
+  private async updatePlayerStats(room: IGameRoom): Promise<void> {
+    const updates = room.players.map(async player => {
+      const answers = room.answeredQuestions.filter(aq => aq.playerId.toString() === player.userId.toString());
+      const correct = answers.filter(a => a.isCorrect).length;
+      const total = answers.length;
+      const totalTime = answers.reduce((sum, a) => sum + a.timeTaken, 0);
+
+      if (total === 0) return;
+
+      const user = await User.findById(player.userId);
+      if (!user) return;
+
+      const newTotalCorrect = (user.stats.totalCorrectAnswers || 0) + correct;
+      const newTotalQuestions = (user.stats.totalQuestionsAnswered || 0) + total;
+      const newAccuracy = newTotalQuestions > 0 ? Math.round((newTotalCorrect / newTotalQuestions) * 100) : 0;
+      const newBestScore = Math.max(user.stats.bestScore || 0, player.score);
+
+      await User.findByIdAndUpdate(player.userId, {
+        $inc: {
+          'stats.gamesPlayed': 1,
+          'stats.totalCorrectAnswers': correct,
+          'stats.totalQuestionsAnswered': total,
+          'stats.totalTimePlayed': totalTime
+        },
+        $set: {
+          'stats.accuracy': newAccuracy,
+          'stats.bestScore': newBestScore
+        }
+      });
+    });
+
+    await Promise.all(updates);
+    logger.info(`Player stats updated for room ${room.roomCode}`);
   }
 
   /**
@@ -569,12 +640,15 @@ class GameService implements IGameService {
         return;
       }
 
-      // If there are no players left, delete the room
       if (room.players.length === 0) {
+        if (room.status === 'active' || room.status === 'finished') {
+          await this.archiveGameHistory(room);
+          await this.updatePlayerStats(room);
+        }
+        
         await this.gameRoomModel.deleteOne({ roomCode });
         logger.info(`Room ${roomCode} has been deleted`);
         
-        // Notify all clients in the room that it's been closed
         this.io?.to(roomCode).emit('room:closed', {
           success: true,
           message: 'Room has been closed due to inactivity'
@@ -592,96 +666,130 @@ class GameService implements IGameService {
    * NOTE: This method is called by SocketService when a player disconnects
    */
   public async handlePlayerDisconnect(socket: Socket, playerId: string, roomCode: string): Promise<void> {
-    const session = await this.gameRoomModel.startSession();
-    session.startTransaction();
+    const maxRetries = 3;
+    let retryCount = 0;
 
-    try {
-      logger.info(`Player ${playerId} disconnected from room ${roomCode}`);
-      
-      // Get the room and player before removing them
-      const room = await this.gameRoomModel.findOne({ roomCode }).session(session);
-      if (!room) {
-        await session.abortTransaction();
-        return;
-      }
-      
-      const player = room.players.find((p: IPlayer) => p.userId.toString() === playerId.toString());
-      if (!player) {
-        await session.abortTransaction();
-        return;
-      }
-      
-      // Check if the disconnected player was the host
-      const wasHost = player.isHost;
-      let newHostId: string | undefined;
-      
-      // Remove player from the room
-      room.players = room.players.filter((p: IPlayer) => p.userId.toString() !== playerId.toString());
-      
-      // If host left and there are remaining players, assign a new host
-      if (wasHost && room.players.length > 0) {
-        const newHost = room.players[0];
-        newHost.isHost = true;
-        newHostId = newHost.userId.toString();
-        room.hostId = new Types.ObjectId(newHostId);
-      }
-      
-      // Save the updated room
-      await room.save({ session });
-      await session.commitTransaction();
-      
-      // Update cache
-      this.gameRooms.set(roomCode, room.toObject());
-      
-      // If no players left, clean up the room
-      if (room.players.length === 0) {
-        await this.cleanupRoom(roomCode);
-        return;
-      }
-      
-      // Notify remaining players
-      if (this.io) {
-        const playersList = room.players.map((p: IPlayer) => ({
-          id: p.userId.toString(),
-          userId: p.userId.toString(),
-          username: p.username,
-          avatar: p.avatar,
-          score: p.score || 0,
-          isHost: p.isHost || false
-        }));
-
-        this.io.to(roomCode).emit('player:removed', {
-          playerId,
-          reason: 'disconnected',
-          players: playersList,
-          newHostId,
-          roomCode
-        } as any);
+    while (retryCount < maxRetries) {
+      try {
+        logger.info(`Player ${playerId} disconnected from room ${roomCode}`);
         
-        // If game was in progress, update game state
-        if (room.status === 'active') {
-          this.io.to(roomCode).emit('game:player_disconnected', {
+        // Get the room first
+        const room = await this.gameRoomModel.findOne({ roomCode });
+        if (!room) {
+          return;
+        }
+        
+        const player = room.players.find((p: IPlayer) => p.userId.toString() === playerId.toString());
+        if (!player) {
+          return;
+        }
+        
+        // Check if the disconnected player was the host
+        const wasHost = player.isHost;
+        let newHostId: string | undefined;
+        
+        // Use atomic operation to remove player
+        const updateOps: any = {
+          $pull: { players: { userId: new Types.ObjectId(playerId) } }
+        };
+        
+        // If host left and there are remaining players, assign a new host
+        if (wasHost && room.players.length > 1) {
+          // Find first non-disconnecting player to be new host
+          const remainingPlayers = room.players.filter((p: IPlayer) => p.userId.toString() !== playerId.toString());
+          if (remainingPlayers.length > 0) {
+            const newHost = remainingPlayers[0];
+            newHostId = newHost.userId.toString();
+            updateOps.$set = {
+              hostId: new Types.ObjectId(newHostId),
+              'players.$[player].isHost': true
+            };
+            updateOps.arrayFilters = [{ 'player.userId': new Types.ObjectId(newHostId) }];
+          }
+        }
+        
+        // Atomic update
+        const updatedRoom = await this.gameRoomModel.findOneAndUpdate(
+          { roomCode, 'players.userId': new Types.ObjectId(playerId) },
+          updateOps,
+          { new: true }
+        );
+        
+        if (!updatedRoom) {
+          // Retry if update failed
+          retryCount++;
+          if (retryCount < maxRetries) {
+            const delay = Math.pow(2, retryCount) * 50;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          return;
+        }
+        
+        // Update cache
+        this.gameRooms.set(roomCode, updatedRoom.toObject());
+        
+        // If no players left, clean up the room
+        if (updatedRoom.players.length === 0) {
+          await this.cleanupRoom(roomCode);
+          return;
+        }
+        
+        // Notify remaining players
+        if (this.io) {
+          const playersList = updatedRoom.players.map((p: IPlayer) => ({
+            id: p.userId.toString(),
+            userId: p.userId.toString(),
+            username: p.username,
+            avatar: p.avatar,
+            score: p.score || 0,
+            isHost: p.isHost || false
+          }));
+
+          this.io.to(roomCode).emit('player:removed', {
             playerId,
+            reason: 'disconnected',
+            players: playersList,
             newHostId,
-            remainingPlayers: room.players.length
+            roomCode
+          } as any);
+          
+          // If game was in progress, update game state
+          if (updatedRoom.status === 'active') {
+            this.io.to(roomCode).emit('game:player_disconnected', {
+              playerId,
+              newHostId,
+              remainingPlayers: updatedRoom.players.length
+            });
+          }
+        }
+        
+        return; // Success, exit retry loop
+      } catch (error: any) {
+        // Retry on write conflict
+        if (error.message?.includes('Write conflict') || 
+            error.message?.includes('E11000') ||
+            error.code === 11000) {
+          retryCount++;
+          if (retryCount < maxRetries) {
+            const delay = Math.pow(2, retryCount) * 50;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+        }
+        
+        logger.error(`Error handling player disconnect:`, error);
+        
+        // Notify the client about the error if the socket is still connected
+        if (socket && socket.connected) {
+          socket.emit('error:game', {
+            code: 'DISCONNECT_ERROR',
+            message: 'An error occurred while handling disconnection',
+            recoverable: true
           });
         }
+        throw error;
       }
-      
-    } catch (error) {
-      await session.abortTransaction();
-      logger.error(`Error handling player disconnect:`, error);
-      
-      // Notify the client about the error if the socket is still connected
-      if (socket && socket.connected) {
-        socket.emit('error:game', {
-          code: 'DISCONNECT_ERROR',
-          message: 'An error occurred while handling disconnection',
-          recoverable: true
-        });
-      }
-    } finally {
-      session.endSession();
     }
   }
 

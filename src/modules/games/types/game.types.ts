@@ -86,7 +86,9 @@ export interface ClientEvents {
   
   // Player Actions
   'player:ready': (data: { isReady: boolean }) => void;
-  'answer:submit': (data: { questionId: string; answer: any }, callback?: (response: { success: boolean; error?: string; data?: any }) => void) => void;
+  'answer:submit': (data: { questionId: string; answer: any; timeTaken?: number }, callback?: (response: { success: boolean; error?: string; data?: any }) => void) => void;
+  // Note: Timeout is handled via answer:submit with answer: null
+  'question:leaderboard': (data: { questionId: string }, callback?: (response: { success: boolean; error?: string; data?: any }) => void) => void;
   'question:next': () => void;
   
   // Chat
@@ -110,7 +112,7 @@ export interface ServerEvents {
   'player:ready': (data: { playerId: string; isReady: boolean }) => void;
   
   // Game Events
-  'game:started': (data: { firstQuestion: Question; timeLimit: number }) => void;
+  'game:started': (data: { totalQuestions: number }) => void;
   'game:ended': (data: { 
     leaderboard: Array<{ 
       id: string; 
@@ -142,6 +144,25 @@ export interface ServerEvents {
     isCorrect: boolean; 
     correctAnswer: string; 
     score: number;
+  }) => void;
+  'all:answered': (data: { 
+    questionId: string;
+  }) => void;
+  'question:leaderboard': (data: {
+    questionId: string;
+    leaderboard: Array<{
+      playerId: string;
+      username: string;
+      avatar?: string;
+      hasAnswered: boolean;
+      isCorrect: boolean;
+      selectedOption: number | null;
+      score: number;
+      timeTaken: number;
+    }>;
+    correctAnswer: number;
+    totalPlayers: number;
+    answeredPlayers: number;
   }) => void;
   
   // Leaderboard Events

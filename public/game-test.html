@@ -178,7 +178,7 @@
                     <li><strong>Step 2 - Socket Connect:</strong> Auto-connects after login</li>
                     <li><strong>Step 3 - Create Room (Host):</strong> Set questions, players, categories → Click "Create Room"</li>
                     <li><strong>Step 4 - Join Room (Players):</strong> Enter room code → Click "Join Room"</li>
-                    <li><strong>Step 5 - Lobby:</strong> See all players, click "Mark Ready" (all players must be ready)</li>
+                    <li><strong>Step 5 - Lobby:</strong> See all players, host can start game (minimum 2 players required)</li>
                     <li><strong>Step 6 - Start Game (Host Only):</strong> Click "Start Game" button</li>
                     <li><strong>Step 7 - Answer Questions:</strong> Select option or wait for timer (auto-skip)</li>
                     <li><strong>Step 8 - Game Summary:</strong> View correct/wrong/skipped answers, accuracy, rank</li>
@@ -308,7 +308,6 @@
                 <h2>👥 Lobby</h2>
                 <div id="roomInfo"></div>
                 <div id="playersList" class="players-list"></div>
-                <button onclick="toggleReady()" id="readyBtn">Mark Ready</button>
                 <button onclick="startGame()" id="startBtn" style="background: #f44336; margin-top: 10px;" disabled>Start Game (Host Only)</button>
                 <div id="lobbyStatus"></div>
             </div>
@@ -362,9 +361,14 @@
         let currentRoom = null;
         let currentQuestion = null;
         let currentQuestionIndex = 0;
+        let totalQuestions = 0;
+        let allQuestions = []; // Store all questions
         let timerInterval = null;
         let timeLeft = 0;
+        let timeLimit = 30;
         let isHost = false;
+        let hasAnsweredCurrentQuestion = false;
+        let questionStartTime = null;
 
         function log(message, type = 'info') {
             const logsContainer = document.getElementById('logs');
@@ -470,24 +474,80 @@
                 updateLobby();
             });
 
-            socket.on('game:started', (data) => {
+            socket.on('game:started', async (data) => {
                 log('🎮 Game started!', 'success');
                 document.getElementById('lobbySection').classList.add('hidden');
                 document.getElementById('gameSection').classList.remove('hidden');
-                showQuestion(data.firstQuestion, data.timeLimit);
-            });
-
-            socket.on('question:new', (data) => {
-                log('❓ New question: ' + data.questionIndex, 'info');
-                showQuestion(data.question, data.timeLimit);
+                totalQuestions = data.totalQuestions || 0;
+                currentQuestionIndex = 0;
+                hasAnsweredCurrentQuestion = false;
+                
+                // Fetch all questions from API
+                try {
+                    log('📥 Fetching questions from API...', 'info');
+                    const response = await fetch(`${API_URL}/api/game/questions/${currentRoom}`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const questionsData = await response.json();
+                    if (questionsData.status === 1) {
+                        allQuestions = questionsData.data.questions || [];
+                        log(`✅ Loaded ${allQuestions.length} questions`, 'success');
+                        // Show first question
+                        if (allQuestions.length > 0) {
+                            showQuestion(allQuestions[0], 30);
+                        }
+                    } else {
+                        log('❌ Failed to load questions: ' + questionsData.message, 'error');
+                    }
+                } catch (error) {
+                    log('❌ Error fetching questions: ' + error.message, 'error');
+                }
             });
 
             socket.on('question:answered', (data) => {
-                log('✅ Answer submitted by player', 'info');
+                log('✅ Answer submitted by player: ' + data.playerId, 'info');
+                // Handle ACK if taskId present
+                if (data.taskId) {
+                    socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                        if (response && response.success) {
+                            log('✅ Message acknowledged', 'success');
+                        }
+                    });
+                }
+            });
+
+            socket.on('all:answered', async (data) => {
+                log('🎯 All players answered question: ' + data.questionId, 'success');
+                // Request leaderboard for this question
+                socket.emit('question:leaderboard', { questionId: data.questionId }, (response) => {
+                    if (response && response.success) {
+                        log('📊 Leaderboard received', 'success');
+                        showQuestionLeaderboard(response.data);
+                    }
+                });
+            });
+
+            socket.on('question:leaderboard', (data) => {
+                log('📊 Question leaderboard received', 'success');
+                // Handle ACK if taskId present
+                if (data.taskId) {
+                    socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                        if (response && response.success) {
+                            log('✅ Leaderboard message acknowledged', 'success');
+                        }
+                    });
+                }
+                showQuestionLeaderboard(data);
+                
+                // After showing leaderboard, wait 3 seconds then show next question
+                setTimeout(() => {
+                    moveToNextQuestion();
+                }, 3000);
             });
 
             socket.on('game:ended', (data) => {
                 log('🏁 Game ended!', 'success');
+                if (timerInterval) clearInterval(timerInterval);
                 document.getElementById('gameSection').classList.add('hidden');
                 document.getElementById('summarySection').classList.remove('hidden');
                 getSummary();
@@ -681,59 +741,50 @@
             }
         }
 
-        // Toggle Ready
-        async function toggleReady() {
-            if (!currentRoom) return;
+        // Toggle Ready - REMOVED (No longer needed, ready check removed)
 
-            try {
-                const response = await fetch(`${API_URL}/api/game/${currentRoom}/ready`, {
-                    method: 'PATCH',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await response.json();
-                if (data.status === 1) {
-                    log('✅ Ready status toggled', 'success');
-                    updateLobby();
-                }
-            } catch (error) {
-                log('❌ Error toggling ready: ' + error.message, 'error');
+        // Start Game (Socket Event)
+        function startGame() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
             }
-        }
+            if (!currentRoom) {
+                log('❌ Not in any room', 'error');
+                return;
+            }
 
-        // Start Game
-        async function startGame() {
-            if (!currentRoom) return;
-
-            try {
-                log('🎮 Starting game...', 'info');
-                const response = await fetch(`${API_URL}/api/game/${currentRoom}/start`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await response.json();
-                if (data.status === 1) {
-                    log('✅ Game started!', 'success');
+            log('🎮 Starting game via socket...', 'info');
+            socket.emit('game:start', {}, (response) => {
+                if (response && response.success) {
+                    log('✅ Game start request sent', 'success');
                 } else {
-                    log('❌ Failed to start: ' + data.message, 'error');
+                    log('❌ Failed to start: ' + (response?.error || 'Unknown error'), 'error');
                 }
-            } catch (error) {
-                log('❌ Error starting game: ' + error.message, 'error');
-            }
+            });
         }
 
         // Show Question
-        function showQuestion(question, timeLimit) {
+        function showQuestion(question, questionTimeLimit) {
             if (!question) return;
 
             currentQuestion = question;
-            timeLeft = timeLimit || 30;
+            timeLimit = questionTimeLimit || 30;
+            timeLeft = timeLimit;
+            hasAnsweredCurrentQuestion = false;
+            questionStartTime = Date.now();
+            
             document.getElementById('timer').textContent = timeLeft;
+            document.getElementById('timer').classList.remove('warning', 'danger');
 
             const container = document.getElementById('questionContainer');
+            const questionNum = currentQuestionIndex + 1;
+            const totalQ = totalQuestions || allQuestions.length || '?';
             container.innerHTML = `
-                <h3>Question ${currentQuestionIndex + 1}</h3>
-                <p style="font-size: 1.2em; margin: 15px 0;">${question.question}</p>
-                <div id="optionsContainer"></div>
+                <h3>Question ${questionNum}${totalQ !== '?' ? ' of ' + totalQ : ''}</h3>
+                <div class="question-text">${question.question || question.questionText}</div>
+                <div id="optionsContainer" style="margin-top: 25px;"></div>
+                <div id="leaderboardContainer" style="margin-top: 20px; display: none;"></div>
             `;
 
             const optionsContainer = document.getElementById('optionsContainer');
@@ -745,51 +796,152 @@
                 optionsContainer.appendChild(btn);
             });
 
-            // Start timer
+            // Start timer with visual feedback
+            const timerElement = document.getElementById('timer');
             if (timerInterval) clearInterval(timerInterval);
+            
             timerInterval = setInterval(() => {
                 timeLeft--;
-                document.getElementById('timer').textContent = timeLeft;
+                timerElement.textContent = timeLeft;
+                
+                // Change color based on time left
+                timerElement.classList.remove('warning', 'danger');
+                if (timeLeft <= 5) {
+                    timerElement.classList.add('danger');
+                } else if (timeLeft <= 10) {
+                    timerElement.classList.add('warning');
+                }
+                
                 if (timeLeft <= 0) {
                     clearInterval(timerInterval);
-                    submitAnswer(-1); // Skip
+                    timerElement.textContent = 'Time Up!';
+                    timerElement.classList.add('danger');
+                    handleTimeout();
                 }
             }, 1000);
         }
 
-        // Submit Answer
-        async function submitAnswer(selectedOption) {
+        // Show Question Leaderboard
+        function showQuestionLeaderboard(data) {
+            const leaderboardContainer = document.getElementById('leaderboardContainer');
+            if (!leaderboardContainer) return;
+
+            let html = '<h4 style="margin-top: 20px; color: #667eea;">📊 Question Leaderboard</h4>';
+            html += `<p style="color: #666; margin: 10px 0;">Correct Answer: Option ${String.fromCharCode(65 + data.correctAnswer)}</p>`;
+            html += '<div style="background: white; padding: 15px; border-radius: 8px; margin-top: 10px;">';
+            
+            data.leaderboard.forEach((player, index) => {
+                const statusIcon = player.hasAnswered 
+                    ? (player.isCorrect ? '✅' : '❌') 
+                    : '⏱️';
+                html += `
+                    <div style="padding: 10px; margin: 5px 0; background: ${player.isCorrect ? '#e8f5e9' : '#ffebee'}; border-radius: 5px; display: flex; justify-content: space-between;">
+                        <span><strong>${index + 1}.</strong> ${player.username} ${statusIcon}</span>
+                        <span>Score: ${player.score} | Time: ${player.timeTaken}s</span>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            
+            leaderboardContainer.innerHTML = html;
+            leaderboardContainer.style.display = 'block';
+        }
+
+        // Handle Timeout
+        function handleTimeout() {
+            if (hasAnsweredCurrentQuestion) {
+                log('⚠️ Timeout but already answered', 'warning');
+                return;
+            }
+            
+            log('⏱️ Time expired - submitting timeout', 'warning');
+            const timeTaken = timeLimit; // Full time limit
+            submitAnswer(null, timeTaken, true);
+        }
+
+        // Submit Answer (Socket Event)
+        function submitAnswer(selectedOption, timeTakenOverride = null, isTimeout = false) {
+            if (!socket || !socket.connected) {
+                log('❌ Socket not connected', 'error');
+                return;
+            }
             if (!currentQuestion || !currentRoom) return;
+            if (hasAnsweredCurrentQuestion && !isTimeout) {
+                log('⚠️ Already answered this question', 'warning');
+                return;
+            }
 
             // Disable buttons
             document.querySelectorAll('.option-btn').forEach(btn => btn.disabled = true);
             if (timerInterval) clearInterval(timerInterval);
 
-            try {
-                log(`📝 Submitting answer: ${selectedOption}`, 'info');
-                const response = await fetch(`${API_URL}/api/game/submit-answer`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({
-                        roomCode: currentRoom,
-                        questionId: currentQuestion.id || currentQuestion._id,
-                        selectedOption: selectedOption,
-                        timeTaken: (timeLimit || 30) - timeLeft
-                    })
-                });
+            const questionId = currentQuestion._id || currentQuestion.id;
+            const timeTaken = timeTakenOverride !== null 
+                ? timeTakenOverride 
+                : (questionStartTime ? Math.floor((Date.now() - questionStartTime) / 1000) : timeLimit - timeLeft);
 
-                const data = await response.json();
-                if (data.status === 1) {
+            log(`📝 Submitting answer via socket: ${selectedOption !== null ? selectedOption : 'TIMEOUT'} (Time: ${timeTaken}s)`, 'info');
+            
+            hasAnsweredCurrentQuestion = true;
+
+            socket.emit('answer:submit', {
+                questionId: questionId,
+                answer: selectedOption,
+                timeTaken: timeTaken
+            }, (response) => {
+                if (response && response.success) {
                     log('✅ Answer submitted successfully', 'success');
-                    currentQuestionIndex++;
                 } else {
-                    log('❌ Failed to submit: ' + data.message, 'error');
+                    log('❌ Failed to submit: ' + (response?.error || 'Unknown error'), 'error');
+                    hasAnsweredCurrentQuestion = false; // Allow retry
                 }
-            } catch (error) {
-                log('❌ Error submitting answer: ' + error.message, 'error');
+            });
+        }
+
+        // Move to Next Question
+        function moveToNextQuestion() {
+            currentQuestionIndex++;
+            hasAnsweredCurrentQuestion = false;
+            
+            if (currentQuestionIndex >= allQuestions.length) {
+                log('🏁 All questions completed!', 'success');
+                
+                // Clear timer
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                }
+                
+                // Hide game section, show summary section
+                const gameSection = document.getElementById('gameSection');
+                const summarySection = document.getElementById('summarySection');
+                if (gameSection) gameSection.classList.add('hidden');
+                if (summarySection) summarySection.classList.remove('hidden');
+                
+                // Hide question leaderboard container
+                const leaderboardContainer = document.getElementById('leaderboardContainer');
+                if (leaderboardContainer) {
+                    leaderboardContainer.style.display = 'none';
+                }
+                
+                // Load final summary and leaderboard
+                log('📊 Loading final summary and leaderboard...', 'info');
+                getSummary();
+                setTimeout(() => {
+                    log('📊 Calling getLeaderboard() after 500ms delay...', 'info');
+                    getLeaderboard();
+                }, 500);
+                
+                return;
+            }
+            
+            // Show next question
+            if (allQuestions[currentQuestionIndex]) {
+                showQuestion(allQuestions[currentQuestionIndex], 30);
+                const leaderboardContainer = document.getElementById('leaderboardContainer');
+                if (leaderboardContainer) {
+                    leaderboardContainer.style.display = 'none';
+                }
             }
         }
 
@@ -821,24 +973,66 @@
 
         // Get Leaderboard
         async function getLeaderboard() {
-            if (!currentRoom) return;
+            log('📊 getLeaderboard() called', 'info');
+            log('📊 currentRoom: ' + currentRoom, 'info');
+            log('📊 token exists: ' + (token ? 'Yes' : 'No'), 'info');
+            
+            if (!currentRoom) {
+                log('❌ No room code for leaderboard', 'error');
+                document.getElementById('leaderboardContent').innerHTML = '<p style="color: #f44336;">❌ No room code available</p>';
+                return;
+            }
+
+            if (!token) {
+                log('❌ No token for leaderboard', 'error');
+                document.getElementById('leaderboardContent').innerHTML = '<p style="color: #f44336;">❌ Not authenticated</p>';
+                return;
+            }
 
             try {
+                log('📊 Fetching leaderboard from API...', 'info');
+                log('📊 API URL: ' + `${API_URL}/api/game/leaderboard/${currentRoom}`, 'info');
+                
                 const response = await fetch(`${API_URL}/api/game/leaderboard/${currentRoom}`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
+                
+                log('📊 API Response status: ' + response.status, 'info');
                 const data = await response.json();
+                
+                log('📊 Leaderboard API response: ' + JSON.stringify(data), 'info');
+                
                 if (data.status === 1) {
-                    const leaderboard = data.data.leaderboard || [];
-                    let html = '<h3>Leaderboard</h3><ol>';
+                    const leaderboard = data.data?.leaderboard?.players || data.data?.leaderboard || [];
+                    
+                    if (leaderboard.length === 0) {
+                        document.getElementById('leaderboardContent').innerHTML = '<p>No leaderboard data available.</p>';
+                        log('⚠️ Leaderboard is empty', 'warning');
+                        return;
+                    }
+                    
+                    let html = '<h3>🏆 Final Leaderboard</h3><ol style="list-style: none; padding: 0;">';
                     leaderboard.forEach((player, index) => {
-                        html += `<li>${player.username} - Score: ${player.score} (Correct: ${player.correctAnswers})</li>`;
+                        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+                        html += `<li style="padding: 10px; margin: 5px 0; background: ${index < 3 ? '#f0f0f0' : '#fff'}; border-radius: 5px;">
+                            <strong>${medal}</strong> ${player.username || 'Unknown'} 
+                            - <strong>Score:</strong> ${player.points || player.score || 0} 
+                            - <strong>Correct:</strong> ${player.correctAnswers || 0} 
+                            - <strong>Accuracy:</strong> ${player.accuracy || 0}%
+                        </li>`;
                     });
                     html += '</ol>';
                     document.getElementById('leaderboardContent').innerHTML = html;
+                    log('✅ Leaderboard loaded successfully with ' + leaderboard.length + ' players', 'success');
+                } else {
+                    const errorMsg = data.message || 'Failed to load leaderboard';
+                    document.getElementById('leaderboardContent').innerHTML = `<p style="color: #f44336;">⚠️ ${errorMsg}</p>`;
+                    log('⚠️ ' + errorMsg, 'warning');
                 }
             } catch (error) {
-                log('❌ Error getting leaderboard: ' + error.message, 'error');
+                const errorMsg = 'Error getting leaderboard: ' + error.message;
+                document.getElementById('leaderboardContent').innerHTML = `<p style="color: #f44336;">❌ ${errorMsg}</p>`;
+                log('❌ ' + errorMsg, 'error');
             }
         }
 

@@ -284,7 +284,8 @@ export class App {
         'X-Requested-With',
         'Accept',
         'X-Access-Token',
-        'X-Refresh-Token'
+        'X-Refresh-Token',
+        'ngrok-skip-browser-warning'
       ],
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       exposedHeaders: ['Content-Range', 'X-Total-Count']
