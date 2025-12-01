@@ -325,6 +325,22 @@
 
                 if (response.ok || response.status === 404 || response.status === 405) {
                     log('✅ Server is reachable!', 'success');
+                    
+                    // Test socket endpoint
+                    log('🔍 Testing socket endpoint...', 'info');
+                    try {
+                        const socketTest = await fetch(`${API_URL}/socket.io/?EIO=4&transport=polling`, {
+                            method: 'GET'
+                        });
+                        if (socketTest.status === 200 || socketTest.status === 400) {
+                            log('✅ Socket endpoint is accessible!', 'success');
+                        } else {
+                            log(`⚠️ Socket endpoint returned status: ${socketTest.status}`, 'warning');
+                        }
+                    } catch (socketError) {
+                        log('⚠️ Could not test socket endpoint: ' + socketError.message, 'warning');
+                    }
+                    
                     showStatus('loginStatus', 'Server is reachable. You can proceed with login.', 'success');
                 } else {
                     log(`⚠️ Server responded with status: ${response.status}`, 'warning');
@@ -334,9 +350,10 @@
                 log('❌ Cannot reach server: ' + error.message, 'error');
                 log('💡 Make sure:', 'warning');
                 log('   1. Server is running', 'warning');
-                log('   2. Server URL is correct (e.g., http://localhost:5000)', 'warning');
+                log('   2. Server URL is correct', 'warning');
                 log('   3. No trailing slash in URL', 'warning');
-                showStatus('loginStatus', 'Cannot reach server. Check logs.', 'error');
+                log('   4. CORS is enabled on server', 'warning');
+                showStatus('loginStatus', 'Cannot reach server. Check logs for details.', 'error');
             }
         }
 
@@ -454,6 +471,16 @@
             // Game Events
             socket.on('player:joined', (data) => {
                 log('👤 Player joined: ' + JSON.stringify(data), 'success');
+                
+                // Acknowledge message if taskId present (buffer system)
+                if (data.taskId) {
+                    socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                        if (response && response.success) {
+                            log('✅ Player joined message acknowledged', 'success');
+                        }
+                    });
+                }
+                
                 updateLobby();
             });
 
@@ -509,6 +536,7 @@
             });
 
             socket.on('game:started', async (data) => {
+                console.log('📥 [RECEIVE] game:started payload:', data);
                 log('🎮 Game started!', 'success');
                 document.getElementById('lobbySection').classList.add('hidden');
                 document.getElementById('gameSection').classList.remove('hidden');

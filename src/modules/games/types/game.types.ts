@@ -112,7 +112,7 @@ export interface ServerEvents {
   'player:ready': (data: { playerId: string; isReady: boolean }) => void;
   
   // Game Events
-  'game:started': (data: { totalQuestions: number }) => void;
+  'game:started': (data: { roomCode: string }) => void;
   'game:ended': (data: { 
     leaderboard: Array<{ 
       id: string; 

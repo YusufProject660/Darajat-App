@@ -298,7 +298,7 @@ async function handleJoinRoom(
           id: userId,
           userId: userId,
           username: username,
-          avatar: socketData.user.avatar,
+          avatar: socketData.user.avatar || '',
           score: 0,
           isHost: hostIdForEvent === userId || isHost || false
         },
@@ -1045,7 +1045,15 @@ export function setupSocketHandlers(io: SocketIOServer<ClientEvents, ServerEvent
         }
 
         const userId = socketData.user.id;
-        const roomCode = socketData.roomCode;
+        const socketRoomCode = socketData.roomCode;
+        const bodyRoomCode = data?.roomCode;
+
+        // Match roomCode from body with socket roomCode
+        if (bodyRoomCode && bodyRoomCode !== socketRoomCode) {
+          return callback?.({ success: false, error: 'Room code mismatch' });
+        }
+
+        const roomCode = bodyRoomCode || socketRoomCode;
 
         if (!roomCode) {
           return callback?.({ success: false, error: 'Not in a room' });
@@ -1078,7 +1086,7 @@ export function setupSocketHandlers(io: SocketIOServer<ClientEvents, ServerEvent
         }
 
         io.to(roomCode).emit('game:started', {
-          totalQuestions: game.questions?.length || 0
+          roomCode: roomCode
         });
 
         callback?.({ success: true, data: { roomCode, status: 'active' } });

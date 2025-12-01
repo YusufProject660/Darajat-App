@@ -2,7 +2,7 @@
 import { Server } from 'socket.io';
 import { Socket } from 'socket.io';
 import { Model, Types } from 'mongoose';
-import { GameRoom, IGameRoom, IPlayer, IAnsweredQuestion } from '../models/gameRoom.model';
+import { GameRoom, IGameRoom, IPlayer } from '../models/gameRoom.model';
 import { Question } from '../models/question.model';
 import { GameHistory } from '../models/gameHistory.model';
 import User from '../../users/user.model';

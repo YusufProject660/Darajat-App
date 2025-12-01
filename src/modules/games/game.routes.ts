@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { protect } from '../../middlewares/auth.middleware';
-import { isHost, isGameInLobby } from '../../middlewares/game.middleware';
+import { isHost } from '../../middlewares/game.middleware';
 import { validateCreateGame, validateJoinGame } from './validations/game.validations';
 
 // Middleware to handle method not allowed

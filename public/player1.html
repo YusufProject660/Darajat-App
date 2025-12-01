@@ -453,91 +453,49 @@
 
             try {
                 log(`🔍 Testing connection to ${API_URL}...`, 'info');
-                log(`📡 Full URL: ${API_URL}/health`, 'info');
                 
-                // Try health endpoint first with timeout
-                let response;
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-                
-                try {
-                    response = await fetch(`${API_URL}/health`, {
-                        method: 'GET',
-                        headers: { 
-                            'Accept': 'application/json',
-                            'ngrok-skip-browser-warning': 'true'
-                        },
-                        mode: 'cors',
-                        signal: controller.signal
+                // Try to fetch a simple endpoint or health check
+                const response = await fetch(`${API_URL}/health`, {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                }).catch(() => {
+                    // If /health doesn't exist, try the API base
+                    return fetch(`${API_URL}/api/auth/login`, {
+                        method: 'OPTIONS',
+                        headers: { 'Accept': 'application/json' }
                     });
-                    clearTimeout(timeoutId);
-                } catch (healthError) {
-                    clearTimeout(timeoutId);
-                    if (healthError.name === 'AbortError') {
-                        log(`⏱️ Request timed out after 10 seconds`, 'error');
-                        throw new Error('Connection timeout - server may be unreachable');
-                    }
-                    log(`⚠️ /health endpoint failed: ${healthError.message}`, 'warning');
-                    log('🔄 Trying /api/auth/login endpoint...', 'info');
-                    
-                    // Try login endpoint as fallback
-                    const controller2 = new AbortController();
-                    const timeoutId2 = setTimeout(() => controller2.abort(), 10000);
-                    try {
-                        response = await fetch(`${API_URL}/api/auth/login`, {
-                            method: 'OPTIONS',
-                            headers: { 
-                                'Accept': 'application/json',
-                                'ngrok-skip-browser-warning': 'true'
-                            },
-                            mode: 'cors',
-                            signal: controller2.signal
-                        });
-                        clearTimeout(timeoutId2);
-                    } catch (loginError) {
-                        clearTimeout(timeoutId2);
-                        if (loginError.name === 'AbortError') {
-                            log(`⏱️ Request timed out after 10 seconds`, 'error');
-                            throw new Error('Connection timeout - server may be unreachable');
-                        }
-                        log(`⚠️ /api/auth/login endpoint also failed: ${loginError.message}`, 'warning');
-                        throw loginError;
-                    }
-                }
+                });
 
-                if (response && (response.ok || response.status === 404 || response.status === 405)) {
+                if (response.ok || response.status === 404 || response.status === 405) {
                     log('✅ Server is reachable!', 'success');
-                    log(`📡 Response Status: ${response.status}`, 'info');
+                    
+                    // Test socket endpoint
+                    log('🔍 Testing socket endpoint...', 'info');
+                    try {
+                        const socketTest = await fetch(`${API_URL}/socket.io/?EIO=4&transport=polling`, {
+                            method: 'GET'
+                        });
+                        if (socketTest.status === 200 || socketTest.status === 400) {
+                            log('✅ Socket endpoint is accessible!', 'success');
+                        } else {
+                            log(`⚠️ Socket endpoint returned status: ${socketTest.status}`, 'warning');
+                        }
+                    } catch (socketError) {
+                        log('⚠️ Could not test socket endpoint: ' + socketError.message, 'warning');
+                    }
+                    
                     showStatus('loginStatus', 'Server is reachable. You can proceed with login.', 'success');
-                } else if (response) {
+                } else {
                     log(`⚠️ Server responded with status: ${response.status}`, 'warning');
                     showStatus('loginStatus', `Server responded (Status: ${response.status})`, 'info');
                 }
             } catch (error) {
                 log('❌ Cannot reach server: ' + error.message, 'error');
-                log('🔍 Error Details:', 'error');
-                log(`   Type: ${error.name || 'Unknown'}`, 'error');
-                log(`   Message: ${error.message}`, 'error');
-                
-                // Check for specific error types
-                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-                    log('💡 Network Error - Possible causes:', 'warning');
-                    log('   1. Server is not running', 'warning');
-                    log('   2. ngrok tunnel is down or URL changed', 'warning');
-                    log('   3. CORS issue - check server CORS settings', 'warning');
-                    log('   4. SSL/Certificate issue with HTTPS', 'warning');
-                    log('   5. Firewall blocking the connection', 'warning');
-                } else if (error.message.includes('CORS')) {
-                    log('💡 CORS Error - Make sure:', 'warning');
-                    log('   1. Server allows your origin', 'warning');
-                    log('   2. ngrok URL is in allowed origins list', 'warning');
-                }
-                
                 log('💡 Make sure:', 'warning');
                 log('   1. Server is running', 'warning');
-                log('   2. Server URL is correct (check ngrok URL)', 'warning');
+                log('   2. Server URL is correct', 'warning');
                 log('   3. No trailing slash in URL', 'warning');
-                log('   4. ngrok tunnel is active', 'warning');
+                log('   4. CORS is enabled on server', 'warning');
                 showStatus('loginStatus', 'Cannot reach server. Check logs for details.', 'error');
             }
         }
@@ -600,9 +558,12 @@
         // Helper function to get common headers for API calls
         function getApiHeaders(includeAuth = true) {
             const headers = {
-                'ngrok-skip-browser-warning': 'true',
                 'Accept': 'application/json'
             };
+            // Only add ngrok header if URL contains ngrok
+            if (API_URL && API_URL.includes('ngrok')) {
+                headers['ngrok-skip-browser-warning'] = 'true';
+            }
             if (includeAuth && token) {
                 headers['Authorization'] = `Bearer ${token}`;
             }
@@ -626,8 +587,7 @@
                     method: 'POST',
                     headers: { 
                         'Content-Type': 'application/json',
-                        'ngrok-skip-browser-warning': 'true',
-                        'Accept': 'application/json'
+                        ...getApiHeaders(false)
                     },
                     body: JSON.stringify({ email, password })
                 });
@@ -698,6 +658,15 @@
                 log('════════════════════════════════════════════════', 'success');
                 log('👤 👤 👤 NEW PLAYER JOINED! 👤 👤 👤', 'success');
                 log('════════════════════════════════════════════════', 'success');
+                
+                // Acknowledge message if taskId present (buffer system)
+                if (data.taskId) {
+                    socket.emit('message:ack', { taskId: data.taskId }, (response) => {
+                        if (response && response.success) {
+                            log('✅ Player joined message acknowledged', 'success');
+                        }
+                    });
+                }
                 
                 // Display all player data
                 const player = data.player || {};
@@ -971,9 +940,7 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`,
-                        'ngrok-skip-browser-warning': 'true',
-                        'Accept': 'application/json'
+                        ...getApiHeaders(true)
                     },
                     body: JSON.stringify({
                         gameId: gameId,
@@ -1038,9 +1005,7 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`,
-                        'ngrok-skip-browser-warning': 'true',
-                        'Accept': 'application/json'
+                        ...getApiHeaders(true)
                     },
                     body: JSON.stringify({
                         roomCode: roomCode,

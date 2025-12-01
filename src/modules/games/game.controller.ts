@@ -116,6 +116,7 @@ interface IRequestWithUser extends Request {
   user?: IUser;
   body: {
     roomCode: string;
+    avatar?: string;
   };
 }
 
@@ -349,7 +350,7 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
 
     const userId = req.user._id;
     const username = req.user.username;
-    const avatar = req.user.avatar;
+    const avatar = req.body.avatar || req.user.avatar || '';
 
     console.log('═══════════════════════════════════════════════════════════');
     console.log('🎮 [JOIN GAME API] Starting player join process...');
@@ -434,7 +435,7 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
           id: userId.toString(),
           userId: userId.toString(),
           username: username,
-          avatar: avatar,
+          avatar: avatar || '',
           score: 0,
           isHost: hostIdForEvent === userId.toString()
         },
