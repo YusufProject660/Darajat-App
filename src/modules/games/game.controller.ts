@@ -938,12 +938,12 @@ const getGameSummary = async (req: Request, res: Response, next: NextFunction) =
     const totalScore = correctAnswers * 10;
     const accuracy = totalQuestions > 0 ? Math.round((correctAnswers / totalQuestions) * 100) : 0;
 
-    // Calculate rank
+    // Calculate rank_badge
     const sortedPlayers = [...gameRoom.players]
       .filter(p => p.userId) // Filter out any invalid player entries
       .sort((a, b) => (b.score || 0) - (a.score || 0));
       
-    const rank = sortedPlayers.findIndex(p => 
+    const rank_badge = sortedPlayers.findIndex(p => 
       p.userId && p.userId.toString() === userId.toString()
     ) + 1;
 
@@ -954,7 +954,7 @@ const getGameSummary = async (req: Request, res: Response, next: NextFunction) =
       wrongAnswers,
       skippedAnswers,
       totalQuestions,
-      rank,
+      rank_badge,
       questions: questionSummaries
     });
 
@@ -976,6 +976,7 @@ interface PlayerStats {
   points: number;
   accuracy: number;
   averageTime: number;
+  timeTaken: number; // ⭐ Total timeTaken (sum of all questions)
   correctAnswers: number;
   totalQuestionsAnswered: number;
 }
@@ -1108,7 +1109,7 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
 
       // Calculate average time per question (in seconds, rounded)
       const averageTime = totalQuestionsAnswered > 0
-        ? Math.round(totalTimeTaken / totalQuestionsAnswered / 1000) // Convert ms to seconds
+        ? Math.round(totalTimeTaken / totalQuestionsAnswered) // timeTaken already in seconds
         : 0;
 
       const playerStat: PlayerStats = {
@@ -1118,6 +1119,7 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
         points: player.score || 0,
         accuracy,
         averageTime,
+        timeTaken: totalTimeTaken, // ⭐ Total timeTaken (sum of all questions)
         correctAnswers,
         totalQuestionsAnswered
       };
@@ -1140,9 +1142,9 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
       return a.averageTime - b.averageTime;
     });
 
-    // Add ranks
+    // Add rank_badge: Top 3 get 1,2,3, rest get -1. Score 0 = -1
     const leaderboard = sortedPlayers.map((player, index) => ({
-      rank: index + 1,
+      rank_badge: (player.points > 0 && index < 3) ? index + 1 : -1,
       userId: player.userId,
       username: player.username,
       avatar: player.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(player.username)}&background=random`,
@@ -1150,6 +1152,7 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
       score: player.points, // Alias for backward compatibility
       accuracy: player.accuracy,
       averageTime: player.averageTime,
+      timeTaken: player.timeTaken, // ⭐ Total timeTaken (sum of all questions)
       correctAnswers: player.correctAnswers,
       totalQuestionsAnswered: player.totalQuestionsAnswered
     }));

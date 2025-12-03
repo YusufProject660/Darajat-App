@@ -446,6 +446,7 @@ async function prepareQuestionLeaderboard(
     selectedOption: number | null;
     score: number;
     timeTaken: number;
+    rank_badge: number;
   }>;
   correctAnswer: number;
   totalPlayers: number;
@@ -459,6 +460,7 @@ async function prepareQuestionLeaderboard(
   const question = await Question.findById(questionId);
   const correctAnswer = question?.correctAnswer ?? 0;
 
+  // Create leaderboard with original order maintained
   const leaderboard = room.players.map((player: any) => {
     // Find answer for this player and question
     const answer = room.answeredQuestions?.find((aq: any) =>
@@ -473,16 +475,72 @@ async function prepareQuestionLeaderboard(
       hasAnswered: !!answer,
       isCorrect: answer?.isCorrect || false,
       selectedOption: answer?.selectedOption ?? null,
-      score: player.score || 0,
-      timeTaken: answer?.timeTaken || 0
+      score: answer?.isCorrect ? 10 : 0, // Score for this question only
+      timeTaken: answer?.timeTaken || 0,
+      originalIndex: room.players.indexOf(player) // Maintain original order
     };
   });
 
-  // Sort by score (descending)
-  leaderboard.sort((a: any, b: any) => b.score - a.score);
+  // Separate correct answers for ranking calculation only
+  const correctAnswersForRanking = leaderboard
+    .filter((p: any) => p.hasAnswered && p.isCorrect)
+    .map((p: any) => ({ 
+      playerId: p.playerId,
+      score: p.score,
+      timeTaken: p.timeTaken
+    })); // Copy only needed fields for sorting
+
+  // Sort correct answers for ranking: score (desc) then timeTaken (asc)
+  correctAnswersForRanking.sort((a: any, b: any) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.timeTaken - b.timeTaken;
+  });
+
+  // Create rank map for correct answers - only top 3 get ranks 1, 2, 3
+  // Rest get -1 even if correct
+  const rankMap = new Map<string, number>();
+  correctAnswersForRanking.forEach((player: any, index: number) => {
+    if (index < 3) {
+      // Top 3 get ranks 1, 2, 3
+      rankMap.set(player.playerId, index + 1);
+    } else {
+      // 4th, 5th, etc. get -1 even if correct
+      rankMap.set(player.playerId, -1);
+    }
+  });
+
+  // Assign rank_badge to original leaderboard
+  leaderboard.forEach((player: any) => {
+    // Remove originalIndex as it's not needed in response
+    delete player.originalIndex;
+    
+    // Only correct answers get rank_badge 1, 2, 3... (sorted by score+time)
+    // Wrong answers or not answered always get -1
+    if (player.hasAnswered && player.isCorrect) {
+      // Get rank from map (1, 2, 3... based on score+time sorting)
+      const assignedRank = rankMap.get(player.playerId);
+      player.rank_badge = assignedRank !== undefined ? assignedRank : -1;
+    } else {
+      // Wrong answer or not answered = -1
+      player.rank_badge = -1;
+    }
+  });
+
+  // ⭐ Sort by rank_badge: 1, 2, 3, then -1 (ranking order)
+  leaderboard.sort((a: any, b: any) => {
+    // Rank 1, 2, 3 first (ascending)
+    if (a.rank_badge > 0 && b.rank_badge > 0) {
+      return a.rank_badge - b.rank_badge;
+    }
+    // Rank badges (1,2,3) before -1
+    if (a.rank_badge > 0) return -1;
+    if (b.rank_badge > 0) return 1;
+    // Both -1, maintain original order
+    return 0;
+  });
 
   return {
-    leaderboard,
+    leaderboard, // Sorted by rank_badge: 1, 2, 3, then -1
     correctAnswer,
     totalPlayers: room.players.length,
     answeredPlayers: leaderboard.filter((p: any) => p.hasAnswered).length
@@ -518,6 +576,25 @@ async function handleSubmitAnswer(
 
     const result = await gameService.submitAnswer(roomCode, playerId, questionId, answer, timeTaken);
     
+    logger.info('📝 Answer submission result', {
+      roomCode,
+      questionId,
+      playerId,
+      correct: result.correct,
+      score: result.score,
+      allPlayersAnswered: result.allPlayersAnswered,
+      willEmitAllAnswered: result.allPlayersAnswered
+    });
+    
+    if (!result.allPlayersAnswered) {
+      logger.warn('⚠️ all:answered event will NOT be emitted', {
+        roomCode,
+        questionId,
+        playerId,
+        reason: 'Not all players have answered yet'
+      });
+    }
+    
     // Get question to get correctAnswer
     const question = await Question.findById(questionId);
     const correctAnswer = question?.correctAnswer?.toString() || '';
@@ -529,6 +606,7 @@ async function handleSubmitAnswer(
       .map(s => s.data.user.id);
 
     const answerData = {
+      questionId: questionId,
       playerId,
       isCorrect: result.correct,
       correctAnswer: correctAnswer,
@@ -556,11 +634,56 @@ async function handleSubmitAnswer(
       socket.to(roomCode).emit('question:answered', answerData);
     }
     
-    // If all players answered, emit signal
+    // If all players answered, emit signal with leaderboard
     if (result.allPlayersAnswered) {
-      io.to(roomCode).emit('all:answered', {
-        questionId: questionId
+      logger.info('🎯 All players answered question', {
+        roomCode,
+        questionId,
+        playerId,
+        totalPlayers: (await io.in(roomCode).fetchSockets()).length
       });
+      
+      // Prepare leaderboard data
+      const leaderboardData = await prepareQuestionLeaderboard(roomCode, questionId);
+      
+      logger.info('📊 Leaderboard data prepared for all:answered event', {
+        roomCode,
+        questionId,
+        leaderboardCount: leaderboardData.leaderboard.length,
+        totalPlayers: leaderboardData.totalPlayers,
+        answeredPlayers: leaderboardData.answeredPlayers,
+        correctAnswer: leaderboardData.correctAnswer
+      });
+      
+      const allAnsweredPayload = {
+        questionId: questionId,
+        leaderboard: leaderboardData.leaderboard,
+        correctAnswer: leaderboardData.correctAnswer,
+        totalPlayers: leaderboardData.totalPlayers,
+        answeredPlayers: leaderboardData.answeredPlayers
+      };
+      
+      io.to(roomCode).emit('all:answered', allAnsweredPayload);
+      
+      logger.info('✅ all:answered event emitted successfully', {
+        roomCode,
+        questionId,
+        payloadSize: JSON.stringify(allAnsweredPayload).length,
+        playersInRoom: (await io.in(roomCode).fetchSockets()).length
+      });
+    }
+    
+    // ⭐ AUTO-FINISH: Check if all questions answered (from service result)
+    if (result.allQuestionsAnswered) {
+      try {
+        await GameRoom.updateOne(
+          { roomCode },
+          { $set: { status: 'finished', finishedAt: new Date() } }
+        );
+        logger.info('✅ Game auto-finished - all questions answered', { roomCode });
+      } catch (error) {
+        logger.error('Error auto-finishing game:', error);
+      }
     }
     
     callback?.({ 

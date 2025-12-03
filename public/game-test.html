@@ -482,25 +482,34 @@
                 currentQuestionIndex = 0;
                 hasAnsweredCurrentQuestion = false;
                 
-                // Fetch all questions from API
-                try {
-                    log('📥 Fetching questions from API...', 'info');
-                    const response = await fetch(`${API_URL}/api/game/questions/${currentRoom}`, {
-                        headers: { 'Authorization': `Bearer ${token}` }
-                    });
-                    const questionsData = await response.json();
-                    if (questionsData.status === 1) {
-                        allQuestions = questionsData.data.questions || [];
-                        log(`✅ Loaded ${allQuestions.length} questions`, 'success');
-                        // Show first question
-                        if (allQuestions.length > 0) {
-                            showQuestion(allQuestions[0], 30);
+                // Use questions from join response if already stored, otherwise fetch from API
+                if (allQuestions && allQuestions.length > 0) {
+                    log(`✅ Using ${allQuestions.length} questions already stored from join response (sequence order)`, 'success');
+                    // Show first question (first in response = first to display)
+                    showQuestion(allQuestions[0], 30);
+                } else {
+                    // Fetch all questions from API
+                    try {
+                        log('📥 Fetching questions from API...', 'info');
+                        const response = await fetch(`${API_URL}/api/game/questions/${currentRoom}`, {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        const questionsData = await response.json();
+                        if (questionsData.status === 1) {
+                            // Store questions in the exact order received from response
+                            allQuestions = questionsData.data.questions || [];
+                            // Ensure questions are in sequence order (no sorting)
+                            log(`✅ Loaded ${allQuestions.length} questions in sequence order`, 'success');
+                            // Show first question (first in response = first to display)
+                            if (allQuestions.length > 0) {
+                                showQuestion(allQuestions[0], 30);
+                            }
+                        } else {
+                            log('❌ Failed to load questions: ' + questionsData.message, 'error');
                         }
-                    } else {
-                        log('❌ Failed to load questions: ' + questionsData.message, 'error');
+                    } catch (error) {
+                        log('❌ Error fetching questions: ' + error.message, 'error');
                     }
-                } catch (error) {
-                    log('❌ Error fetching questions: ' + error.message, 'error');
                 }
             });
 
@@ -518,13 +527,26 @@
 
             socket.on('all:answered', async (data) => {
                 log('🎯 All players answered question: ' + data.questionId, 'success');
-                // Request leaderboard for this question
-                socket.emit('question:leaderboard', { questionId: data.questionId }, (response) => {
-                    if (response && response.success) {
-                        log('📊 Leaderboard received', 'success');
-                        showQuestionLeaderboard(response.data);
-                    }
-                });
+                
+                // If leaderboard data is already in the event, use it directly
+                if (data.leaderboard && Array.isArray(data.leaderboard)) {
+                    log('📊 Leaderboard received in all:answered event', 'success');
+                    showQuestionLeaderboard({
+                        questionId: data.questionId,
+                        leaderboard: data.leaderboard,
+                        correctAnswer: data.correctAnswer,
+                        totalPlayers: data.totalPlayers,
+                        answeredPlayers: data.answeredPlayers
+                    });
+                } else {
+                    // Fallback: Request leaderboard for this question (existing flow)
+                    socket.emit('question:leaderboard', { questionId: data.questionId }, (response) => {
+                        if (response && response.success) {
+                            log('📊 Leaderboard received via request', 'success');
+                            showQuestionLeaderboard(response.data);
+                        }
+                    });
+                }
             });
 
             socket.on('question:leaderboard', (data) => {
@@ -677,6 +699,14 @@
                     currentRoom = roomCode;
                     isHost = false;
                     log('✅ Joined room via API: ' + currentRoom, 'success');
+                    
+                    // Store questions from join response in exact sequence order
+                    if (data.data.questions && Array.isArray(data.data.questions)) {
+                        allQuestions = data.data.questions || [];
+                        log(`✅ Stored ${allQuestions.length} questions from join response in sequence order`, 'success');
+                        log(`📋 Questions sequence: ${allQuestions.map((q, idx) => `Q${idx + 1}`).join(', ')}`, 'info');
+                    }
+                    
                     showStatus('joinRoomStatus', 'Joined room: ' + currentRoom, 'success');
                     
                     // Join via socket
@@ -834,9 +864,12 @@
                 const statusIcon = player.hasAnswered 
                     ? (player.isCorrect ? '✅' : '❌') 
                     : '⏱️';
+                const rankBadge = player.rank_badge > 0 
+                    ? `<span style="background: #4caf50; color: white; padding: 2px 8px; border-radius: 12px; font-weight: bold; margin-right: 8px;">${player.rank_badge}</span>`
+                    : `<span style="background: #f44336; color: white; padding: 2px 8px; border-radius: 12px; font-weight: bold; margin-right: 8px;">-1</span>`;
                 html += `
-                    <div style="padding: 10px; margin: 5px 0; background: ${player.isCorrect ? '#e8f5e9' : '#ffebee'}; border-radius: 5px; display: flex; justify-content: space-between;">
-                        <span><strong>${index + 1}.</strong> ${player.username} ${statusIcon}</span>
+                    <div style="padding: 10px; margin: 5px 0; background: ${player.isCorrect ? '#e8f5e9' : '#ffebee'}; border-radius: 5px; display: flex; justify-content: space-between; align-items: center;">
+                        <span>${rankBadge} ${player.username} ${statusIcon}</span>
                         <span>Score: ${player.score} | Time: ${player.timeTaken}s</span>
                     </div>
                 `;

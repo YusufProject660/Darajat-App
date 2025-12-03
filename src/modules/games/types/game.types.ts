@@ -140,6 +140,7 @@ export interface ServerEvents {
   }) => void;
   'question:timeout': () => void;
   'question:answered': (data: { 
+    questionId: string;
     playerId: string;
     isCorrect: boolean; 
     correctAnswer: string; 
@@ -147,6 +148,19 @@ export interface ServerEvents {
   }) => void;
   'all:answered': (data: { 
     questionId: string;
+    leaderboard?: Array<{
+      playerId: string;
+      username: string;
+      avatar?: string;
+      hasAnswered: boolean;
+      isCorrect: boolean;
+      selectedOption: number | null;
+      score: number;
+      timeTaken: number;
+    }>;
+    correctAnswer?: number;
+    totalPlayers?: number;
+    answeredPlayers?: number;
   }) => void;
   'question:leaderboard': (data: {
     questionId: string;

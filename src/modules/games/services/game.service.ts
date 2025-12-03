@@ -447,7 +447,7 @@ class GameService implements IGameService {
     questionId: string,
     answer: any,
     timeTaken: number = 0
-  ): Promise<{ correct: boolean; score: number; allPlayersAnswered: boolean }> {
+  ): Promise<{ correct: boolean; score: number; allPlayersAnswered: boolean; allQuestionsAnswered?: boolean }> {
     const maxRetries = 3;
     let retryCount = 0;
 
@@ -524,15 +524,81 @@ class GameService implements IGameService {
         const player = room.players.find((p: any) => p.userId.toString() === userId);
         const finalScore = player?.score || 0;
 
-        // Check if all players have answered
-        const allPlayersAnswered = room.players.every((p: any) => 
-          room.answeredQuestions?.some((aq: any) => 
-            aq.playerId.toString() === p.userId.toString() && 
-            aq.questionId.toString() === questionId
-          )
-        );
+        // Check if all players have answered - with detailed logging
+        const totalPlayers = room.players.length;
+        const answeredQuestionsForThisQuestion = room.answeredQuestions?.filter(
+          (aq: any) => aq.questionId && aq.questionId.toString() === questionId
+        ) || [];
+        
+        logger.info('🔍 Checking allPlayersAnswered status', {
+          roomCode,
+          questionId,
+          totalPlayers,
+          answeredCount: answeredQuestionsForThisQuestion.length,
+          answeredPlayerIds: answeredQuestionsForThisQuestion.map((aq: any) => aq.playerId?.toString()).filter(Boolean),
+          allPlayerIds: room.players.map((p: any) => p.userId?.toString()).filter(Boolean),
+          currentPlayerId: userId,
+          currentPlayerAnswer: answer
+        });
 
-        return { correct: isCorrect, score: finalScore, allPlayersAnswered };
+        // Detailed check for each player
+        const playerCheckResults: any[] = [];
+        const allPlayersAnswered = room.players.every((p: any) => {
+          const playerId = p.userId?.toString();
+          const hasAnswered = room.answeredQuestions?.some((aq: any) => {
+            const aqPlayerId = aq.playerId?.toString();
+            const aqQuestionId = aq.questionId?.toString();
+            const matches = aqPlayerId === playerId && aqQuestionId === questionId;
+            return matches;
+          });
+          
+          playerCheckResults.push({
+            playerId,
+            username: p.username,
+            hasAnswered,
+            isCurrentPlayer: playerId === userId
+          });
+          
+          if (!hasAnswered) {
+            logger.warn('⚠️ Player has not answered yet', {
+              roomCode,
+              questionId,
+              playerId,
+              playerUsername: p.username,
+              totalAnswers: answeredQuestionsForThisQuestion.length,
+              allAnsweredPlayerIds: answeredQuestionsForThisQuestion.map((aq: any) => aq.playerId?.toString()).filter(Boolean)
+            });
+          }
+          
+          return hasAnswered;
+        });
+
+        logger.info('✅ allPlayersAnswered check result', {
+          roomCode,
+          questionId,
+          allPlayersAnswered,
+          totalPlayers,
+          answeredCount: answeredQuestionsForThisQuestion.length,
+          playerCheckResults: playerCheckResults,
+          answeredPlayerIds: answeredQuestionsForThisQuestion.map((aq: any) => aq.playerId?.toString()).filter(Boolean),
+          allPlayerIds: room.players.map((p: any) => p.userId?.toString()).filter(Boolean)
+        });
+
+        // ⭐ Check if all dedicated questions are answered by all players
+        let allQuestionsAnswered = false;
+        if (room.questions && Array.isArray(room.questions) && room.questions.length > 0) {
+          const dedicatedQuestionIds = new Set(room.questions.map((q: any) => q?.toString()).filter(Boolean));
+          const totalDedicatedQuestions = dedicatedQuestionIds.size;
+          allQuestionsAnswered = room.players.every((player: any) => {
+            const playerAnswers = room.answeredQuestions?.filter((aq: any) => 
+              aq.playerId?.toString() === player.userId?.toString() &&
+              dedicatedQuestionIds.has(aq.questionId?.toString())
+            ) || [];
+            return new Set(playerAnswers.map((aq: any) => aq.questionId?.toString())).size === totalDedicatedQuestions;
+          });
+        }
+
+        return { correct: isCorrect, score: finalScore, allPlayersAnswered, allQuestionsAnswered };
       } catch (error: any) {
         // Retry on write conflict or duplicate key error
         if (error.message?.includes('Write conflict') || 
