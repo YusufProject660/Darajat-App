@@ -802,36 +802,36 @@
                     log(`🎯 Showing first question (index 0)...`, 'info');
                     showQuestion(allQuestions[0], 30);
                 } else {
-                    // Fetch all questions from API
-                    try {
-                        log('📥 Fetching questions from API...', 'info');
-                        const response = await fetch(`${API_URL}/api/game/questions/${currentRoom}`, {
-                            headers: getApiHeaders(true)
-                        });
-                        const questionsData = await safeJsonParse(response);
-                        log(`📥 Questions API Response: ${JSON.stringify(questionsData, null, 2)}`, 'info');
-                        
-                        if (questionsData.status === 1) {
+                // Fetch all questions from API
+                try {
+                    log('📥 Fetching questions from API...', 'info');
+                    const response = await fetch(`${API_URL}/api/game/questions/${currentRoom}`, {
+                        headers: getApiHeaders(true)
+                    });
+                    const questionsData = await safeJsonParse(response);
+                    log(`📥 Questions API Response: ${JSON.stringify(questionsData, null, 2)}`, 'info');
+                    
+                    if (questionsData.status === 1) {
                             // Store questions in the exact order received from response
-                            allQuestions = questionsData.data.questions || [];
+                        allQuestions = questionsData.data.questions || [];
                             // Ensure questions are in sequence order (no sorting)
                             log(`✅ Loaded ${allQuestions.length} questions in sequence order`, 'success');
-                            log(`📋 First question preview: ${JSON.stringify(allQuestions[0], null, 2)}`, 'info');
-                            
+                        log(`📋 First question preview: ${JSON.stringify(allQuestions[0], null, 2)}`, 'info');
+                        
                             // Show first question (first in response = first to display)
-                            if (allQuestions.length > 0) {
+                        if (allQuestions.length > 0) {
                                 log(`🎯 Showing first question (index 0)...`, 'info');
-                                showQuestion(allQuestions[0], 30);
-                            } else {
-                                log('❌ No questions in array!', 'error');
-                                showStatus('gameStatus', 'No questions available', 'error');
-                            }
+                            showQuestion(allQuestions[0], 30);
                         } else {
-                            log('❌ Failed to load questions: ' + questionsData.message, 'error');
-                            showStatus('gameStatus', 'Failed to load questions: ' + questionsData.message, 'error');
+                            log('❌ No questions in array!', 'error');
+                            showStatus('gameStatus', 'No questions available', 'error');
                         }
-                    } catch (error) {
-                        log('❌ Error fetching questions: ' + error.message, 'error');
+                    } else {
+                        log('❌ Failed to load questions: ' + questionsData.message, 'error');
+                        showStatus('gameStatus', 'Failed to load questions: ' + questionsData.message, 'error');
+                    }
+                } catch (error) {
+                    log('❌ Error fetching questions: ' + error.message, 'error');
                     }
                 }
             });
@@ -863,12 +863,12 @@
                     });
                 } else {
                     // Fallback: Request leaderboard for this question (existing flow)
-                    socket.emit('question:leaderboard', { questionId: data.questionId }, (response) => {
-                        if (response && response.success) {
+                socket.emit('question:leaderboard', { questionId: data.questionId }, (response) => {
+                    if (response && response.success) {
                             log('📊 Leaderboard received via request', 'success');
-                            showQuestionLeaderboard(response.data);
-                        }
-                    });
+                        showQuestionLeaderboard(response.data);
+                    }
+                });
                 }
             });
 

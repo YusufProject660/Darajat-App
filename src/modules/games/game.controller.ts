@@ -1252,6 +1252,8 @@ const finishGame = async (req: IFinishGameRequest, res: Response) => {
     logger.info(`Game room ${roomCode} marked as completed`);
 
     // Update player stats with error handling for each player
+    // ⭐ IMPORTANT: Only update stats for players who COMPLETED the game (answered all questions)
+    const totalQuestionsInGame = totalQuestions;
     const updatePromises = gameRoom.players.map(async (player: IPlayer) => {
       if (!player.userId) {
         logger.warn('Player missing userId, skipping update');
@@ -1264,12 +1266,27 @@ const finishGame = async (req: IFinishGameRequest, res: Response) => {
           a.playerId && a.playerId.toString() === playerId
         );
         
+        // Get unique question IDs answered by this player
+        const uniqueQuestionIds = new Set(playerAnswers.map((a: any) => a.questionId?.toString()).filter(Boolean));
+        const questionsAnswered = uniqueQuestionIds.size;
+        
+        // ⭐ CRITICAL: Only update stats if player answered ALL questions (completed the game)
+        if (questionsAnswered < totalQuestionsInGame) {
+          logger.info(`Player ${playerId} did not complete the game (answered ${questionsAnswered}/${totalQuestionsInGame} questions). Skipping stats update.`, {
+            roomCode,
+            playerId,
+            questionsAnswered,
+            totalQuestionsInGame
+          });
+          return null; // Don't count incomplete games
+        }
+        
         const playerCorrect = playerAnswers.filter((a: any) => a.isCorrect).length;
         const playerAccuracy = playerAnswers.length > 0 
           ? Math.round((playerCorrect / playerAnswers.length) * 100) 
           : 0;
           
-        logger.debug(`Updating stats for player ${playerId}: ${playerCorrect} correct out of ${playerAnswers.length}, accuracy: ${playerAccuracy}%`);
+        logger.debug(`Updating stats for player who completed game ${playerId}: ${playerCorrect} correct out of ${playerAnswers.length}, accuracy: ${playerAccuracy}%`);
 
         // First get current user stats to calculate running totals
         const user = await User.findById(playerId).session(session);

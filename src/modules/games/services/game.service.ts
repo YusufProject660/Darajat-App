@@ -32,6 +32,7 @@ interface IGameService {
     timeTaken?: number
   ): Promise<{ correct: boolean; score: number; allPlayersAnswered: boolean }>;
   getGameState(roomCode: string, forceRefresh?: boolean): Promise<IGameRoom | null>;
+  finishGameAndUpdateStats(roomCode: string): Promise<void>;
   cleanup(): Promise<void>;
 }
 
@@ -299,6 +300,19 @@ class GameService implements IGameService {
       
       // Ensure userId is a valid ObjectId
       const userId = new Types.ObjectId(playerData.userId.toString());
+
+      // ⭐ Remove player from any other waiting rooms
+      await this.gameRoomModel.updateMany(
+        { 
+          'players.userId': userId,
+          status: 'waiting',
+          roomCode: { $ne: roomCode } // ⭐ Exclude current room
+        },
+        { 
+          $pull: { players: { userId: userId } }
+        },
+        { session }
+      );
 
       // Find the room
       const room = await this.gameRoomModel.findOne({ roomCode }).session(session);
@@ -658,18 +672,52 @@ class GameService implements IGameService {
 
   /**
    * Update player stats after game
+   * ⭐ IMPORTANT: Only updates stats for players who COMPLETED the game (answered all questions)
+   * Players who disconnected or didn't complete the game will NOT have their stats updated
    */
   private async updatePlayerStats(room: IGameRoom): Promise<void> {
+    // Get total number of questions in the game
+    const totalQuestionsInGame = room.questions?.length || 0;
+    if (totalQuestionsInGame === 0) {
+      logger.warn(`No questions found in room ${room.roomCode}, skipping stats update`);
+      return;
+    }
+
     const updates = room.players.map(async player => {
+      // Get all answers for this player
       const answers = room.answeredQuestions.filter(aq => aq.playerId.toString() === player.userId.toString());
+      
+      // Get unique question IDs answered by this player
+      const uniqueQuestionIds = new Set(answers.map(a => a.questionId?.toString()).filter(Boolean));
+      const questionsAnswered = uniqueQuestionIds.size;
+      
+      // ⭐ CRITICAL: Only update stats if player answered ALL questions (completed the game)
+      if (questionsAnswered < totalQuestionsInGame) {
+        logger.info(`Player ${player.userId} did not complete the game (answered ${questionsAnswered}/${totalQuestionsInGame} questions). Skipping stats update.`, {
+          roomCode: room.roomCode,
+          playerId: player.userId.toString(),
+          username: player.username,
+          questionsAnswered,
+          totalQuestionsInGame
+        });
+        return; // Don't count incomplete games
+      }
+
+      // Player completed the game - calculate stats
       const correct = answers.filter(a => a.isCorrect).length;
       const total = answers.length;
       const totalTime = answers.reduce((sum, a) => sum + a.timeTaken, 0);
 
-      if (total === 0) return;
+      if (total === 0) {
+        logger.warn(`Player ${player.userId} has no answers despite completing game check`);
+        return;
+      }
 
       const user = await User.findById(player.userId);
-      if (!user) return;
+      if (!user) {
+        logger.warn(`User not found for player ${player.userId}`);
+        return;
+      }
 
       const newTotalCorrect = (user.stats.totalCorrectAnswers || 0) + correct;
       const newTotalQuestions = (user.stats.totalQuestionsAnswered || 0) + total;
@@ -688,10 +736,51 @@ class GameService implements IGameService {
           'stats.bestScore': newBestScore
         }
       });
+
+      logger.info(`✅ Stats updated for player who completed game`, {
+        roomCode: room.roomCode,
+        playerId: player.userId.toString(),
+        username: player.username,
+        questionsAnswered: total,
+        correctAnswers: correct,
+        score: player.score
+      });
     });
 
     await Promise.all(updates);
-    logger.info(`Player stats updated for room ${room.roomCode}`);
+    logger.info(`Player stats updated for room ${room.roomCode} (only for completed players)`);
+  }
+
+  /**
+   * Finish game and update player stats
+   * This method archives game history and updates player stats when game is finished
+   * @param roomCode The room code of the finished game
+   */
+  public async finishGameAndUpdateStats(roomCode: string): Promise<void> {
+    try {
+      const room = await this.gameRoomModel.findOne({ roomCode });
+      if (!room) {
+        logger.warn(`Room ${roomCode} not found for finishing game`);
+        return;
+      }
+
+      // Only process if game is finished or active (to avoid duplicate processing)
+      if (room.status !== 'finished' && room.status !== 'active') {
+        logger.warn(`Room ${roomCode} is not in a finishable state: ${room.status}`);
+        return;
+      }
+
+      // Archive game history
+      await this.archiveGameHistory(room);
+      
+      // Update player stats
+      await this.updatePlayerStats(room);
+      
+      logger.info(`Game finished and stats updated for room ${room.roomCode}`);
+    } catch (error) {
+      logger.error(`Error finishing game and updating stats for room ${roomCode}:`, error);
+      throw error;
+    }
   }
 
   /**
@@ -707,9 +796,14 @@ class GameService implements IGameService {
       }
 
       if (room.players.length === 0) {
-        if (room.status === 'active' || room.status === 'finished') {
+        // Only update stats if room is active (not finished)
+        // Finished games should have stats updated by finishGameAndUpdateStats
+        if (room.status === 'active') {
           await this.archiveGameHistory(room);
           await this.updatePlayerStats(room);
+        } else if (room.status === 'finished') {
+          // For finished games, only archive history (stats already updated)
+          await this.archiveGameHistory(room);
         }
         
         await this.gameRoomModel.deleteOne({ roomCode });
@@ -750,7 +844,13 @@ class GameService implements IGameService {
           return;
         }
         
-        // Check if the disconnected player was the host
+        // ⭐ If game is waiting, don't remove player from DB (allow reconnect)
+        if (room.status === 'waiting') {
+          logger.info(`⏱️ Player ${playerId} disconnected from waiting room - keeping in DB for reconnect`);
+          return; // Don't remove from DB, player can reconnect
+        }
+        
+        // If game is active/finished, remove immediately
         const wasHost = player.isHost;
         let newHostId: string | undefined;
         
@@ -855,6 +955,7 @@ class GameService implements IGameService {
           });
         }
         throw error;
+
       }
     }
   }
@@ -902,6 +1003,19 @@ class GameService implements IGameService {
     session.startTransaction();
     
     try {
+      // ⭐ Remove host from any other waiting rooms
+      await this.gameRoomModel.updateMany(
+        { 
+          'players.userId': new Types.ObjectId(hostId),
+          status: 'waiting',
+          roomCode: { $ne: roomCode } // ⭐ Exclude current room
+        },
+        { 
+          $pull: { players: { userId: new Types.ObjectId(hostId) } }
+        },
+        { session }
+      );
+
       // Check if room already exists
       const existingRoom = await this.gameRoomModel.findOne({ roomCode }).session(session);
       if (existingRoom) {
@@ -1036,3 +1150,4 @@ class GameService implements IGameService {
 const gameService = new GameService();
 
 export { gameService };
+

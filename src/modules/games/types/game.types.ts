@@ -104,6 +104,23 @@ export interface ServerEvents {
   'room:updated': (data: { room: GameRoom }) => void;
   'room:left': () => void;
   
+  // Room Events
+  'room:state': (data: {
+    roomCode: string;
+    status: string;
+    hostId: string;
+    players: Array<{
+      userId: string;
+      username: string;
+      avatar?: string;
+      score: number;
+      isHost: boolean;
+      isReady: boolean;
+    }>;
+    settings?: any;
+    isReconnect: boolean;
+  }) => void;
+  
   // Player Events
   'player:joined': (data: { player: Player; players: Player[] }) => void;
   'player:left': (data: { playerId: string; players: Player[]; newHostId?: string }) => void;

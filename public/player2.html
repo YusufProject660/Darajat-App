@@ -582,27 +582,27 @@
                     // Show first question (first in response = first to display)
                     showQuestion(allQuestions[0], 30);
                 } else {
-                    // Fetch all questions from API
-                    try {
-                        log('📥 Fetching questions from API...', 'info');
-                        const response = await fetch(`${API_URL}/api/game/questions/${currentRoom}`, {
-                            headers: getApiHeaders(true)
-                        });
-                        const questionsData = await safeJsonParse(response);
-                        if (questionsData.status === 1) {
+                // Fetch all questions from API
+                try {
+                    log('📥 Fetching questions from API...', 'info');
+                    const response = await fetch(`${API_URL}/api/game/questions/${currentRoom}`, {
+                        headers: getApiHeaders(true)
+                    });
+                    const questionsData = await safeJsonParse(response);
+                    if (questionsData.status === 1) {
                             // Store questions in the exact order received from response
-                            allQuestions = questionsData.data.questions || [];
+                        allQuestions = questionsData.data.questions || [];
                             // Ensure questions are in sequence order (no sorting)
                             log(`✅ Loaded ${allQuestions.length} questions in sequence order`, 'success');
                             // Show first question (first in response = first to display)
-                            if (allQuestions.length > 0) {
-                                showQuestion(allQuestions[0], 30);
-                            }
-                        } else {
-                            log('❌ Failed to load questions: ' + questionsData.message, 'error');
+                        if (allQuestions.length > 0) {
+                            showQuestion(allQuestions[0], 30);
                         }
-                    } catch (error) {
-                        log('❌ Error fetching questions: ' + error.message, 'error');
+                    } else {
+                        log('❌ Failed to load questions: ' + questionsData.message, 'error');
+                    }
+                } catch (error) {
+                    log('❌ Error fetching questions: ' + error.message, 'error');
                     }
                 }
             });
@@ -634,12 +634,12 @@
                     });
                 } else {
                     // Fallback: Request leaderboard for this question (existing flow)
-                    socket.emit('question:leaderboard', { questionId: data.questionId }, (response) => {
-                        if (response && response.success) {
+                socket.emit('question:leaderboard', { questionId: data.questionId }, (response) => {
+                    if (response && response.success) {
                             log('📊 Leaderboard received via request', 'success');
-                            showQuestionLeaderboard(response.data);
-                        }
-                    });
+                        showQuestionLeaderboard(response.data);
+                    }
+                });
                 }
             });
 

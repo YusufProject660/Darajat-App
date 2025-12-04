@@ -681,6 +681,15 @@ async function handleSubmitAnswer(
           { $set: { status: 'finished', finishedAt: new Date() } }
         );
         logger.info('✅ Game auto-finished - all questions answered', { roomCode });
+        
+        // ⭐ Update player stats when game finishes
+        try {
+          await gameService.finishGameAndUpdateStats(roomCode);
+          logger.info('✅ Player stats updated after game auto-finish', { roomCode });
+        } catch (statsError) {
+          logger.error('Error updating player stats after auto-finish:', statsError);
+          // Don't throw - game is already finished, stats update failure shouldn't block
+        }
       } catch (error) {
         logger.error('Error auto-finishing game:', error);
       }
@@ -1137,6 +1146,77 @@ export function setupSocketHandlers(io: SocketIOServer<ClientEvents, ServerEvent
       connectionTime: connectionTime.toISOString(),
       userData: socket.data?.user || null
     });
+
+    // ⭐ AUTO-REJOIN: Check if player was in a waiting room and auto-rejoin
+    const userId = socket.data?.user?.id;
+    // ⭐ Only auto-rejoin if NOT already in a room (player joined new room)
+    if (userId && !socket.data.roomCode) {
+      // Use async IIFE to handle await
+      (async () => {
+        try {
+          // ⭐ Check if user was in a WAITING room - get the MOST RECENT one (only if player still in room)
+          // ⭐ NOTE: If player left room intentionally, they won't be in players array, so won't auto-rejoin
+          const userRooms = await GameRoom.find({
+            'players.userId': new Types.ObjectId(userId),
+            status: 'waiting'  // ⭐ Only waiting rooms
+          })
+          .sort({ updatedAt: -1 }) // ⭐ Most recently updated = jo room abhi choda
+          .limit(1) // ⭐ Only get the most recent one
+          .lean() as any[];
+          
+          if (userRooms.length > 0) {
+            // ⭐ User was in a waiting room, check if player still exists in room (not left intentionally)
+            const roomToRejoin = userRooms[0]; // Most recent room
+            const roomCode = roomToRejoin.roomCode;
+            const player = roomToRejoin.players?.find((p: any) =>
+              p.userId?.toString() === userId || p.userId?.toString?.() === userId.toString()
+            );
+            
+            // ⭐ Only auto-rejoin if player still in room (not left intentionally)
+            if (player && roomCode) {
+              console.log('🔄 [AUTO-REJOIN] Player reconnecting to waiting room...');
+              logger.info('🔄 Auto-rejoining player to waiting room on reconnect', {
+                socketId: socket.id,
+                userId,
+                roomCode
+              });
+              
+              // ⭐ Directly join socket to room using roomCode
+              await socket.join(roomCode);
+              socket.data.roomCode = roomCode;
+              socket.data.playerId = userId;
+              
+              console.log('✅ [AUTO-REJOIN] Socket joined to room:', roomCode);
+              
+              // Send room state to reconnecting player
+              const currentRoomState = {
+                roomCode: roomToRejoin.roomCode,
+                status: roomToRejoin.status,
+                hostId: roomToRejoin.hostId?.toString() || roomToRejoin.hostId,
+                players: (roomToRejoin.players || []).map((p: any) => ({
+                  userId: p.userId?.toString() || p.userId,
+                  username: p.username,
+                  avatar: p.avatar || '',
+                  score: p.score || 0,
+                  isHost: p.isHost || false,
+                  isReady: p.isReady || false
+                })),
+                settings: roomToRejoin.settings,
+                isReconnect: true
+              };
+              
+              (socket as any).emit('room:state', currentRoomState);
+              
+              console.log('✅ [AUTO-REJOIN] Player auto-rejoined to waiting room');
+              logger.info('✅ Auto-rejoined player to waiting room', { roomCode, userId });
+            }
+          }
+        } catch (error) {
+          logger.error('Error in auto-rejoin check:', error);
+          // Don't block connection if auto-rejoin fails
+        }
+      })();
+    }
 
     // Handle joining a room
     socket.on('room:join', async (data, callback) => {

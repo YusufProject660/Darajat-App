@@ -66,17 +66,24 @@ export const getUserProfile = asyncHandler(async (req: Request, res: Response) =
     return res.apiError('User not found', 'USER_NOT_FOUND');
   }
 
-  // Format the response with all stats fields
+  // ⭐ Calculate overall accuracy from all games played
+  const totalCorrect = user.stats?.totalCorrectAnswers ?? 0;
+  const totalQuestions = user.stats?.totalQuestionsAnswered ?? 0;
+  const overallAccuracy = totalQuestions > 0 
+    ? Math.round((totalCorrect / totalQuestions) * 100) 
+    : 0;
+
+  // Format the response with stats fields
   const userProfile = {
     userId: user._id,
     firstName: user.firstName || '',
     lastName: user.lastName || '',
     email: user.email,
-    avatar : user.avatar || null,
+    avatar: user.avatar || null,
     stats: {
-      gamesPlayed: user.stats?.gamesPlayed ?? 0,
-      accuracy: user.stats?.accuracy ?? 0,
-      bestScore: user.stats?.bestScore ?? 0
+      gamesPlayed: user.stats?.gamesPlayed ?? 0, // ⭐ Total games played
+      accuracy: overallAccuracy, // ⭐ Overall accuracy (all games)
+      bestScore: user.stats?.bestScore ?? 0 // ⭐ Best score (highest from all games)
     }
   };
 
