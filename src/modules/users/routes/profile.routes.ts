@@ -35,7 +35,7 @@ router.route('/profile')
 
 // PUT /profile-picture - Upload profile picture 
 router.route('/profile-picture')
-  .put(validatePutMethod, protect, upload.single('profilePicture'), (err: any, req: any, res: any, next: any) => {
+  .put(validatePutMethod, protect, upload.single('profilePicture'), (err: any, _req: any, res: any, next: any) => {
     if (err?.code === 'LIMIT_FILE_SIZE') return res.status(200).json({ status: 0, message: 'Image size must not exceed 2MB. Please upload a smaller image.' });
     if (err) return res.status(200).json({ status: 0, message: err.message || 'File upload error. Please try again.' });
     next();

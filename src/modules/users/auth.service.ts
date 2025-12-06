@@ -663,19 +663,19 @@ export const saveFirebaseUser = async (
   firebase_uid: string,
   email: string,
   first_name: string,
-  last_name: string
+  last_name?: string
 ): Promise<IUser> => {
   try {
     // Validate required fields
-    if (!firebase_uid || !email || !first_name || !last_name) {
-      throw new AppError('All fields (firebase_uid, email, first_name, last_name) are required', 400);
+    if (!firebase_uid || !email || !first_name) {
+      throw new AppError('All fields (firebase_uid, email, first_name) are required', 400);
     }
 
     // Trim and normalize inputs
     const trimmedFirebaseUid = firebase_uid.trim();
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedFirstName = first_name.trim();
-    const trimmedLastName = last_name.trim();
+    const trimmedLastName = last_name?.trim() || '';
 
     // Check if user with this firebase_uid already exists
     let existingUser = await User.findOne({ firebase_uid: trimmedFirebaseUid });
@@ -684,7 +684,9 @@ export const saveFirebaseUser = async (
       // Update existing user
       existingUser.email = trimmedEmail;
       existingUser.firstName = trimmedFirstName;
-      existingUser.lastName = trimmedLastName;
+      if (trimmedLastName) {
+        existingUser.lastName = trimmedLastName;
+      }
       await existingUser.save();
       logger.info(`Updated Firebase user with UID: ${trimmedFirebaseUid}`);
       return existingUser;
@@ -702,7 +704,9 @@ export const saveFirebaseUser = async (
       // Update existing user with firebase_uid (only if no firebase_uid or same firebase_uid)
       existingEmailUser.firebase_uid = trimmedFirebaseUid;
       existingEmailUser.firstName = trimmedFirstName;
-      existingEmailUser.lastName = trimmedLastName;
+      if (trimmedLastName) {
+        existingEmailUser.lastName = trimmedLastName;
+      }
       existingEmailUser.authProvider = 'google';
       existingEmailUser.isOAuthUser = true;
       await existingEmailUser.save();
@@ -728,7 +732,7 @@ export const saveFirebaseUser = async (
       firebase_uid: trimmedFirebaseUid,
       email: trimmedEmail,
       firstName: trimmedFirstName,
-      lastName: trimmedLastName,
+      ...(trimmedLastName && { lastName: trimmedLastName }),
       username: generatedUsername,
       authProvider: 'google',
       isOAuthUser: true

@@ -823,13 +823,6 @@ export const saveFirebaseUserHandler = asyncHandler(async (req: Request, res: Re
       });
     }
 
-    if (!last_name) {
-      return res.status(200).json({
-        status: 0,
-        message: 'last_name is required'
-      });
-    }
-
     // Validate email format
     const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
     if (
