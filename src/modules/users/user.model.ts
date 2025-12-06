@@ -20,6 +20,9 @@ export interface IUser extends Document {
   resetToken?: string;
   resetTokenExpires?: Date;
   lastResetRequest?: Date;
+  otp?: string;
+  otpExpires?: Date;
+  otpVerified?: boolean;
   authProvider?: 'google' | 'email';
   isOAuthUser?: boolean;
   hasPassword?: boolean; // Explicitly track if user has a password set
@@ -33,16 +36,17 @@ const userSchema = new Schema<IUser>(
     firstName: {
       type: String,
       trim: true,
-      maxlength: [50, 'First name cannot be more than 50 characters']
+      maxlength: [20, 'First name cannot be more than 20 characters']
     },
     lastName: {
       type: String,
       trim: true,
-      maxlength: [50, 'Last name cannot be more than 50 characters']
+      maxlength: [20, 'Last name cannot be more than 20 characters']
     },
     username: {
       type: String,
-      trim: true
+      trim: true,
+      maxlength: [20, 'Username cannot be more than 20 characters']
     },
     email: {
       type: String,
@@ -94,7 +98,7 @@ const userSchema = new Schema<IUser>(
     },
     password: {
       type: String,
-      minlength: [6, 'Password must be at least 6 characters'],
+      minlength: [8, 'Password must be at least 8 characters'],
       maxlength: [20, 'Password must be less than or equal to 20 characters'],
       validate: {
         validator: function(v: string) {
@@ -155,6 +159,19 @@ const userSchema = new Schema<IUser>(
     },
     lastResetRequest: {
       type: Date,
+      select: false
+    },
+    otp: {
+      type: String,
+      select: false
+    },
+    otpExpires: {
+      type: Date,
+      select: false
+    },
+    otpVerified: {
+      type: Boolean,
+      default: false,
       select: false
     }
   },

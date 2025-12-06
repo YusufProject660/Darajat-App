@@ -64,13 +64,13 @@ const firebaseUserSchema = new Schema<IFirebaseUser>(
       type: String,
       required: [true, 'First name is required'],
       trim: true,
-      maxlength: [50, 'First name cannot be more than 50 characters']
+      maxlength: [20, 'First name cannot be more than 20 characters']
     },
     last_name: {
       type: String,
       required: [true, 'Last name is required'],
       trim: true,
-      maxlength: [50, 'Last name cannot be more than 50 characters']
+      maxlength: [20, 'Last name cannot be more than 20 characters']
     }
   },
   {

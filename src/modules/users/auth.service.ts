@@ -1,12 +1,12 @@
 import { config } from '../../config/env';
 import jwt from 'jsonwebtoken';
-import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { AppError } from '../../utils/appError';
 import User, { IUser } from './user.model';
 import { AuthResponse } from './types/user.types';
 import { sendPasswordResetEmail } from '../../services/email.service';
 import { logger } from '../../utils/logger';
+import { validatePassword } from '../../utils/passwordValidator';
 
 const SALT_ROUNDS = 10;
 
@@ -103,8 +103,10 @@ export const register = async (email: string, password: string, _confirmPassword
     throw new AppError('Password cannot be empty', 400);
   }
   
-  if (password.length < 6) {
-    throw new AppError('Password must be at least 6 characters long', 400);
+  // Use password validator for consistent validation
+  const passwordValidation = validatePassword(password);
+  if (!passwordValidation.isValid) {
+    throw new AppError(passwordValidation.message, 400);
   }
 
   // Create user with plain password - the pre-save hook will handle hashing
@@ -153,11 +155,11 @@ export const login = async (email: string, password: string): Promise<AuthRespon
     throw error;
   }
 
-  // Check if this is an OAuth user trying to log in with password
-  if (user.isOAuthUser || !user.password) {
-    const error = new Error('This account uses OAuth for authentication. Please sign in with your OAuth provider.') as any;
+  // Check if password is available
+  if (!user.password) {
+    const error = new Error('Invalid email or password') as any;
     error.statusCode = 401;
-    error.code = 'OAUTH_ACCOUNT';
+    error.code = 'INVALID_CREDENTIALS';
     throw error;
   }
 
@@ -199,18 +201,18 @@ export const getMe = async (userId: string): Promise<AuthResponse> => {
   return formatUserResponse(user, token);
 };
 
-// Generate reset token
-const generateResetToken = (): { token: string; expiresAt: Date } => {
-  // Generate a random token
-  const resetToken = crypto.randomBytes(32).toString('hex');
+// Generate OTP (6-digit code)
+const generateOTP = (): { otp: string; expiresAt: Date } => {
+  // Generate a 6-digit OTP
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
   
-  // Set token expiration to 15 minutes from now
-  const resetTokenExpires = new Date();
-  resetTokenExpires.setMinutes(resetTokenExpires.getMinutes() + 15);
+  // Set OTP expiration to 15 minutes from now
+  const expiresAt = new Date();
+  expiresAt.setMinutes(expiresAt.getMinutes() + 15);
   
   return {
-    token: resetToken,
-    expiresAt: resetTokenExpires
+    otp,
+    expiresAt
   };
 };
 
@@ -282,7 +284,7 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
         // Race between the user lookup and a timeout
         const user = await Promise.race([
           User.findOne({ email })
-            .select('+password +resetToken +resetTokenExpires +isOAuthUser +authProvider')
+            .select('+password +resetToken +resetTokenExpires +otp +otpExpires +otpVerified +isOAuthUser +authProvider +hasPassword')
             .maxTimeMS(5000) // 5 second timeout for the query
             .lean(),
           new Promise<null>((_, reject) => 
@@ -294,24 +296,12 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
           logger.info(`${logPrefix} [3/7] No user found with email:`, email);
           return {
             status: 0,
-            message: 'If an account with this email exists, you will receive a password reset link.',
-            code: 'USER_NOT_FOUND'
+            message: 'User not found.'
           };
         }
 
-        // 2. Check if this is an OAuth user
+        // 2. Allow OAuth users to set/reset password (no blocking)
         let userDoc = Array.isArray(user) ? user[0] : user;
-        if (userDoc && (userDoc as any).isOAuthUser) {
-          logger.info(`${logPrefix} [4/7] OAuth account detected:`, {
-            email: (userDoc as any).email,
-            provider: (userDoc as any).authProvider
-          });
-          return {
-            status: 0,
-            message: 'This account uses OAuth for authentication. Please sign in with your OAuth provider.',
-            code: 'OAUTH_ACCOUNT'
-          };
-        }
 
         // 3. Check cooldown period (1 minute between requests)
         const COOLDOWN_PERIOD = 60 * 1000; // 1 minute
@@ -323,46 +313,41 @@ export const forgotPassword = async (email: string): Promise<ForgotPasswordRespo
             logger.warn(`${logPrefix} [5/7] Reset requested too soon. Please wait ${remainingTime} seconds.`);
             return {
               status: 0,
-              message: `Please wait ${remainingTime} seconds before requesting another reset link.`,
-              code: 'RESET_COOLDOWN',
-              remainingTime
+              message: `Please wait ${remainingTime} seconds before requesting another reset link.`
             };
           }
         }
 
-        // 4. Generate and save reset token
-        logger.debug(`${logPrefix} [6/7] Generating reset token...`);
-        const { token, expiresAt } = generateResetToken();
+        // 4. Generate and save new OTP (clear old OTP and verification status)
+        logger.debug(`${logPrefix} [6/7] Generating new OTP...`);
+        const { otp, expiresAt } = generateOTP();
         
         userDoc = Array.isArray(user) ? user[0] : user;
         await User.updateOne(
           { _id: (userDoc as any)._id },
           {
             $set: {
-              resetToken: token,
-              resetTokenExpires: expiresAt,
+              otp: otp,
+              otpExpires: expiresAt,
+              otpVerified: false, // Reset verification status
               lastResetRequest: now
+            },
+            $unset: {
+              resetToken: "", // Clear old token if exists
+              resetTokenExpires: "" // Clear old token expiry
             }
           }
         );
 
-        // 5. Send reset email (don't await this, respond immediately)
-        logger.info(`${logPrefix} [7/7] Scheduling password reset email...`);
-        const resetUrl = `${config.backendUrl || 'http://localhost:5000'}/api/auth/reset-password?token=${token}`;
-        
-        // Don't await the email sending, just start it and respond
+        // 5. Send OTP email
+        logger.info(`${logPrefix} [7/7] Sending password reset OTP...`);
         userDoc = Array.isArray(user) ? user[0] : user;
-        sendPasswordResetEmail((userDoc as any).email, resetUrl)
-          .then(() => {
-            logger.info(`${logPrefix} [EMAIL_SENT] Password reset email sent to ${(userDoc as any).email}`);
-          })
-          .catch((emailError) => {
-            logger.error(`${logPrefix} [EMAIL_ERROR] Failed to send email:`, emailError);
-          });
+        await sendPasswordResetEmail((userDoc as any).email, otp);
+        logger.info(`${logPrefix} [EMAIL_SENT] Password reset OTP sent to ${(userDoc as any).email}`);
 
         return {
           status: 1,
-          message: 'If an account with this email exists, you will receive a password reset link.'
+          message: 'Password reset OTP sent to your mail.'
         };
 
       } catch (error) {
@@ -404,11 +389,11 @@ export const changePassword = async (userId: string, currentPassword: string, ne
       return { success: false, message: 'User not found' };
     }
 
-    // Check if this is an OAuth user
-    if (user.isOAuthUser || !user.password) {
+    // Check if password is available
+    if (!user.password) {
       return { 
         success: false, 
-        message: 'This account uses OAuth for authentication. Please use the OAuth provider to sign in.' 
+        message: 'Password is not set for this account. Please set a password first.' 
       };
     }
 
@@ -556,27 +541,93 @@ export const deleteUser = async (userId: string): Promise<{ success: boolean; me
   }
 };
 
-export const resetPassword = async (token: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
-  const logPrefix = '🔵 [RESET_PASSWORD]';
+// Verify OTP
+export const verifyOTP = async (email: string, otp: string): Promise<{ success: boolean; message: string }> => {
+  const logPrefix = '🔵 [VERIFY_OTP]';
   try {
-    // 1. Find user by reset token and check if token is not expired
+    // 1. Find user by email and OTP
     const user = await User.findOne({
-      resetToken: token,
-      resetTokenExpires: { $gt: new Date() }
-    });
+      email: email.toLowerCase().trim(),
+      otp: otp,
+      otpExpires: { $gt: new Date() }
+    }).select('+otp +otpExpires +otpVerified');
 
     if (!user) {
       return { 
         success: false, 
-        message: 'Reset link is invalid or has expired.' 
+        message: 'OTP is invalid, expired, or not verified. Please verify OTP first.' 
       };
     }
 
-    // 2. Update password
-    // Just set the plain password - the pre-save hook will handle hashing it
+    // 2. Check if OTP is already verified
+    if (user.otpVerified) {
+      return { 
+        success: false, 
+        message: 'OTP has already been used. Please request a new OTP.' 
+      };
+    }
+
+    // 3. Mark OTP as verified
+    user.otpVerified = true;
+    await user.save();
+
+    logger.info(`${logPrefix} OTP verified successfully for email: ${email}`);
+    return { 
+      success: true, 
+      message: 'OTP verified successfully.' 
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error(`❌ ${logPrefix} [ERROR] Error verifying OTP:`, {
+      error: errorMessage,
+      timestamp: new Date().toISOString()
+    });
+    return { 
+      success: false, 
+      message: 'An error occurred while verifying OTP.' 
+    };
+  }
+};
+
+// Reset password (requires verified OTP)
+export const resetPassword = async (email: string, otp: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+  const logPrefix = '🔵 [RESET_PASSWORD]';
+  try {
+    // 1. Find user by email with verified OTP
+    const user = await User.findOne({
+      email: email.toLowerCase().trim(),
+      otp: otp,
+      otpExpires: { $gt: new Date() },
+      otpVerified: true
+    }).select('+otp +otpExpires +otpVerified +isOAuthUser +hasPassword');
+
+    if (!user) {
+      return { 
+        success: false, 
+        message: 'OTP is invalid, expired, or not verified. Please verify OTP first.' 
+      };
+    }
+
+    // 2. Validate new password
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.isValid) {
+      return { 
+        success: false, 
+        message: passwordValidation.message 
+      };
+    }
+
+    // 3. Update password and clear OTP fields
     user.password = newPassword;
-    user.resetToken = undefined;
-    user.resetTokenExpires = undefined;
+    user.otp = undefined;
+    user.otpExpires = undefined;
+    user.otpVerified = undefined;
+    
+    // If OAuth user is setting password for first time, mark hasPassword = true
+    if (user.isOAuthUser && !user.hasPassword) {
+      user.hasPassword = true;
+      logger.info(`${logPrefix} OAuth user setting password for first time: ${email}`);
+    }
     
     // This will trigger the pre-save hook to hash the password
     await user.save();

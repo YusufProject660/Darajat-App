@@ -8,8 +8,8 @@ import {
   googleCallback,
   googleAuthSuccess,
   googleAuthFailure,
+  verifyOTPHandler,
   resetPasswordHandler,
-  resetPasswordPage,
   changePassword,
   updateUserProfile,
   deleteUserAccount,
@@ -72,9 +72,10 @@ router.all('/logout', (req, res, next) => {
 router.post('/logout', logoutUser);
 
 // Password reset routes
-router.get('/reset-password', resetPasswordPage as any);
+// Verify OTP route
+router.post('/verify-otp', verifyOTPHandler as any);
 
-// Handle the reset password form submission
+// Handle the reset password
 router.post('/reset-password', resetPasswordHandler as any);
 
 // Helper function to create a timeout promise
@@ -114,6 +115,10 @@ const handleForgotPassword = async (req: Request, res: Response) => {
 
     // Normalize the email
     const normalizedEmail = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return res.status(200).json({ status: 0, message: 'Invalid email format.' });
+    }
     logger.info(`${logPrefix} [PROCESSING] Processing request for email:`, normalizedEmail);
 
     // Call the forgotPassword service with timeout
@@ -225,7 +230,11 @@ router.all('/profile-picture', (req, res, next) => {
   next();
   return;
 });
-router.put('/profile-picture', protect, upload.single('profilePicture'), updateProfilePicture);
+router.put('/profile-picture', protect, upload.single('profilePicture'), (err: any, req: any, res: any, next: any) => {
+  if (err?.code === 'LIMIT_FILE_SIZE') return res.status(200).json({ status: 0, message: 'Image size must not exceed 2MB. Please upload a smaller image.' });
+  if (err) return res.status(200).json({ status: 0, message: err.message || 'File upload error. Please try again.' });
+  next();
+}, updateProfilePicture);
 
 router.delete('/delete', protect, deleteUserAccount);
 router.all('/delete', (req, res, next) => {

@@ -101,12 +101,8 @@ export const getUserProfile = asyncHandler(async (req: Request, res: Response) =
 // In src/modules/users/controllers/profile.controller.ts
 export const updateProfilePicture = asyncHandler(async (req: any, res: Response) => {
   try {
-    // Check if file was uploaded
     if (!req.file) {
-      return res.status(200).json({
-        status: 0,
-        message: 'Please upload an image file.'
-      });
+      return res.status(200).json({ status: 0, message: 'Please upload an image file.' });
     }
 
     // Get user from database
@@ -146,13 +142,10 @@ export const updateProfilePicture = asyncHandler(async (req: any, res: Response)
     });
 
   } catch (error: any) {
-    // Clean up the uploaded file if there was an error
-    if (req.file && (await fs.pathExists(req.file.path))) {
-      await fs.unlink(req.file.path);
+    if (req.file && (await fs.pathExists(req.file.path))) await fs.unlink(req.file.path);
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(200).json({ status: 0, message: 'Image size must not exceed 2MB. Please upload a smaller image.' });
     }
-    return res.status(200).json({
-      status: 0,
-      message: error.message || 'Image upload failed. Please try again later.'
-    });
+    return res.status(200).json({ status: 0, message: error.message || 'Image upload failed. Please try again later.' });
   }
 });

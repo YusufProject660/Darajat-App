@@ -371,6 +371,17 @@ export class App {
     // Serve uploads directory for profile pictures
     this.app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
     
+    // Serve docs directory for PDF files and documentation (from uploads/docs)
+    // Set headers to force download for PDF files
+    this.app.use('/docs', (req, res, next) => {
+      // If it's a PDF file, set Content-Disposition header to force download
+      if (req.path.endsWith('.pdf')) {
+        res.setHeader('Content-Disposition', `attachment; filename="${path.basename(req.path)}"`);
+        res.setHeader('Content-Type', 'application/pdf');
+      }
+      next();
+    }, express.static(path.join(process.cwd(), 'uploads', 'docs')));
+    
     // Serve game-test.html explicitly (for backward compatibility)
     this.app.get('/game-test.html', (_req, res) => {
       const filePath = path.join(publicDir, 'game-test.html');

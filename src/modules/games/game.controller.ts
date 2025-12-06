@@ -685,6 +685,9 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
       if (error.message === 'Room not found') {
         return res.apiError('Game room not found', 'ROOM_NOT_FOUND');
       }
+      if (error.message === 'Game has finished. Please join a new game.') {
+        return res.apiError('Game has finished. Please join a new game.', 'GAME_FINISHED');
+      }
       if (error.message === 'Game has already started') {
         return res.apiError('Game has already started', 'GAME_ALREADY_STARTED');
       }
@@ -1147,7 +1150,7 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
       rank_badge: (player.points > 0 && index < 3) ? index + 1 : -1,
       userId: player.userId,
       username: player.username,
-      avatar: player.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(player.username)}&background=random`,
+      avatar: player.avatar ||"" ,
       points: player.points,
       score: player.points, // Alias for backward compatibility
       accuracy: player.accuracy,
@@ -1658,8 +1661,8 @@ const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: NextFun
     }
 
     const gameRoom = await GameRoom.findOne({ roomCode })
-      .populate('players.userId')
-      .populate('hostId')
+      .populate('players.userId', 'firstName username email avatar')
+      .populate('hostId', 'firstName username email avatar')
       .lean() as any;
 
     if (!gameRoom) {
@@ -1674,16 +1677,22 @@ const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: NextFun
       return next(new AppError('You are not a member of this game', 403));
     }
 
+    const getDisplayName = (user: any) => {
+      if (user?.firstName) return user.firstName;
+      if (user?.email) return user.email.split('@')[0];
+      return user?.username || 'Unknown';
+    };
+
     const response = {
       roomCode: gameRoom.roomCode,
       status: gameRoom.status,
       host: {
         id: gameRoom.hostId?._id || gameRoom.hostId,
-        username: gameRoom.hostId?.username || 'Unknown'
+        username: getDisplayName(gameRoom.hostId)
       },
       players: (gameRoom.players || []).map((player: any) => ({
         id: player.userId?._id || player.userId,
-        username: player.userId?.username || player.username,
+        username: getDisplayName(player.userId) || player.username,
         avatar: player.avatar,
         isHost: player.isHost,
         isReady: player.isReady,

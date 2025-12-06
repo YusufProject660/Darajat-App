@@ -142,27 +142,21 @@ const sendEmail = async (options: IEmailOptions): Promise<SentMessageInfo> => {
   }
 };
 
-// Send password reset email
-const sendPasswordResetEmail = async (email: string, resetUrl: string): Promise<SentMessageInfo> => {
-  const subject = 'Password Reset Request';
+// Send password reset OTP email
+const sendPasswordResetEmail = async (email: string, otp: string): Promise<SentMessageInfo> => {
+  const subject = 'Password Reset OTP';
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <h2>Password Reset Request</h2>
-      <p>You requested a password reset for your account. Click the button below to reset your password:</p>
+      <h2>Password Reset OTP</h2>
+      <p>You requested a password reset for your account. Use the OTP below to reset your password:</p>
       <p style="text-align: center; margin: 30px 0;">
-        <a href="${resetUrl}" 
-           style="display: inline-block; padding: 10px 20px; background-color: #4CAF50; 
-                  color: white; text-decoration: none; border-radius: 4px;">
-          Reset Password
-        </a>
+        <span style="display: inline-block; padding: 15px 30px; background-color: #4CAF50; 
+                  color: white; font-size: 24px; font-weight: bold; border-radius: 4px; letter-spacing: 5px;">
+          ${otp}
+        </span>
       </p>
       <p>If you didn't request this, you can safely ignore this email.</p>
-      <p>This link will expire in 1 hour.</p>
-      <hr>
-      <p style="font-size: 12px; color: #666;">
-        If the button doesn't work, copy and paste this link into your browser:<br>
-        ${resetUrl}
-      </p>
+      <p>This OTP will expire in 15 minutes.</p>
     </div>
   `;
 

@@ -320,8 +320,11 @@ class GameService implements IGameService {
         throw new Error('Room not found');
       }
 
-      // Check if game has already started
-      if (room.status !== 'waiting') {
+      // Check game status
+      if (room.status === 'finished') {
+        throw new Error('Game has finished. Please join a new game.');
+      }
+      if (room.status === 'active') {
         throw new Error('Game has already started');
       }
 

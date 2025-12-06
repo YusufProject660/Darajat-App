@@ -36,6 +36,15 @@ export const validatePassword = (password: string): PasswordValidationResult => 
     };
   }
 
+  // Check maximum length
+  if (password.length > 20) {
+    return { 
+      isValid: false, 
+      message: 'Password must not exceed 20 characters.',
+      strength: 'weak'
+    };
+  }
+
   // Check for whitespace
   if (/\s/.test(password)) {
     return { 

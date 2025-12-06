@@ -1,9 +1,6 @@
 import { Request, Response } from 'express';
-import path from 'path';
-import fs from 'fs/promises';
-import fsSync from 'fs';
 import { IUser } from './user.model';
-import { register, login, getMe, forgotPassword, resetPassword, changePassword as changePasswordService, updateProfile, deleteUser, saveFirebaseUser, generateToken } from './auth.service';
+import { register, login, getMe, forgotPassword, resetPassword, verifyOTP, changePassword as changePasswordService, updateProfile, deleteUser, saveFirebaseUser, generateToken } from './auth.service';
 import { addToBlacklist } from '../../utils/tokenBlacklist';
 import { AppError } from '../../utils/appError';
 import { AuthRequest } from './types/user.types';
@@ -235,10 +232,10 @@ export const loginUser = asyncHandler(async (req: Request, res: Response) => {
     }
     
     if (error.code === 'OAUTH_ACCOUNT') {
-      return res.apiError(
-        error.message || 'This account uses OAuth for authentication. Please sign in with your OAuth provider.',
-        'OAUTH_AUTH_REQUIRED'
-      );
+      return res.status(200).json({
+        status: 0,
+        message: 'This account was created with Google. Please sign in with Google instead of email and password.'
+      });
     }
     
     // Pass other errors to the global error handler
@@ -485,52 +482,66 @@ export const requestPasswordReset = asyncHandler(async (req: Request, res: Respo
   }
 });
 
-// @desc    Reset Password
-// @route   POST /api/auth/reset-password
-// @access Public
-// @desc    Reset Password Page
-// @route   GET /api/auth/reset-password
+// @desc    Verify OTP
+// @route   POST /api/auth/verify-otp
 // @access  Public
-export const resetPasswordPage = async (req: Request, res: Response): Promise<void> => {
-    try {
-        const { token } = (req as any).query as { token?: string };
-        
-        if (!token) {
-            res.status(400).send('Invalid or missing reset token');
-            return;
-        }
+export const verifyOTPHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = req.body as { email?: string; otp?: string };
+    let { email, otp } = body;
 
-        // Create public directory if it doesn't exist
-        const publicDir = path.join(__dirname, '../../../public');
-        if (!fsSync.existsSync(publicDir)) {
-            logger.debug(`Creating public directory at: ${publicDir}`);
-            await fs.mkdir(publicDir, { recursive: true });
-        }
+    // Trim whitespace from inputs
+    email = email?.trim();
+    otp = otp?.trim();
 
-        const filePath = path.join(publicDir, 'reset-password.html');
-        logger.debug(`Looking for reset password HTML at: ${filePath}`);
-        
-        // Check if file exists, if not create it
-        if (!fsSync.existsSync(filePath)) {
-            logger.info('Reset password HTML not found, creating new one...');
-            await fs.writeFile(filePath, getResetPasswordHTML(), 'utf-8');
-        }
-
-        let html = await fs.readFile(filePath, 'utf-8');
-        
-        // Inject the token into the HTML
-        html = html.replace(
-            'id="token" value=""', 
-            `id="token" value="${token}"`
-        );
-        
-        // Set content type to HTML
-        res.setHeader('Content-Type', 'text/html');
-        res.send(html);
-    } catch (error) {
-        logger.error('Error serving reset password page:', error);
-        res.status(500).send('An error occurred while loading the reset password page');
+    // Validate email
+    if (!email) {
+      res.status(200).json({
+        status: 0,
+        message: 'Email is required'
+      });
+      return;
     }
+
+    // Validate OTP
+    if (!otp) {
+      res.status(200).json({
+        status: 0,
+        message: 'OTP is required'
+      });
+      return;
+    }
+
+    // Validate OTP format (6 digits)
+    if (!/^\d{6}$/.test(otp)) {
+      res.status(200).json({
+        status: 0,
+        message: 'OTP must be a 6-digit number'
+      });
+      return;
+    }
+
+    const result = await verifyOTP(email, otp);
+    
+    if (!result.success) {
+      res.status(200).json({
+        status: 0,
+        message: result.message
+      });
+      return;
+    }
+
+    res.status(200).json({
+      status: 1,
+      message: result.message || 'OTP verified successfully'
+    });
+  } catch (error) {
+    logger.error('Error in verifyOTPHandler:', error);
+    res.status(200).json({
+      status: 0,
+      message: 'An error occurred while verifying OTP'
+    });
+  }
 };
 
 // @desc    Reset Password
@@ -538,19 +549,37 @@ export const resetPasswordPage = async (req: Request, res: Response): Promise<vo
 // @access  Public
 export const resetPasswordHandler = async (req: Request, res: Response): Promise<void> => {
   try {
-    const body = req.body as { token?: string; password?: string; confirmPassword?: string };
-    let { token, password, confirmPassword } = body;
+    const body = req.body as any;
+    
+    // Handle case-insensitive field names
+    let email = (body.email || body.Email || body.EMAIL)?.trim();
+    let otp = (body.otp || body.Otp || body.OTP)?.trim();
+    let password = (body.password || body.Password || body.PASSWORD)?.trim();
+    let confirmPassword = (body.confirmPassword || body.ConfirmPassword || body.CONFIRMPASSWORD || body.confirmpassword)?.trim();
 
-    // Trim whitespace from inputs
-    token = token?.trim();
-    password = password?.trim();
-    confirmPassword = confirmPassword?.trim();
-
-    // Validate token
-    if (!token) {
+    // Validate email
+    if (!email) {
       res.status(200).json({
         status: 0,
-        message: 'Token is required'
+        message: 'Email is required'
+      });
+      return;
+    }
+
+    // Validate OTP
+    if (!otp) {
+      res.status(200).json({
+        status: 0,
+        message: 'OTP is required'
+      });
+      return;
+    }
+
+    // Validate OTP format (6 digits)
+    if (!/^\d{6}$/.test(otp)) {
+      res.status(200).json({
+        status: 0,
+        message: 'OTP must be a 6-digit number'
       });
       return;
     }
@@ -581,7 +610,7 @@ export const resetPasswordHandler = async (req: Request, res: Response): Promise
       return;
     }
 
-    const result = await resetPassword(token, password);
+    const result = await resetPassword(email, otp, password);
     
     if (!result.success) {
       res.status(200).json({
@@ -602,226 +631,6 @@ export const resetPasswordHandler = async (req: Request, res: Response): Promise
       message: 'An error occurred while resetting your password'
     });
   }
-};
-
-// Helper function to generate the reset password HTML
-const getResetPasswordHTML = () => {
-    return `<!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Reset Password - Darajat</title>
-        <style>
-            body {
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                line-height: 1.6;
-                margin: 0;
-                padding: 20px;
-                background-color: #f5f7fa;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: 100vh;
-            }
-            .container {
-                background: white;
-                padding: 2rem;
-                border-radius: 8px;
-                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                max-width: 400px;
-                width: 100%;
-            }
-            h2 {
-                color: #2d3748;
-                margin-top: 0;
-                text-align: center;
-            }
-            .form-group {
-                margin-bottom: 1.5rem;
-            }
-            label {
-                display: block;
-                margin-bottom: 0.5rem;
-                color: #4a5568;
-                font-weight: 500;
-            }
-            input[type="password"] {
-                width: 100%;
-                padding: 0.75rem;
-                border: 1px solid #e2e8f0;
-                border-radius: 4px;
-                font-size: 1rem;
-                transition: border-color 0.2s;
-            }
-            input[type="password"]:focus {
-                outline: none;
-                border-color: #4299e1;
-                box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.2);
-            }
-            button {
-                width: 100%;
-                background-color: #4299e1;
-                color: white;
-                border: none;
-                padding: 0.75rem;
-                border-radius: 4px;
-                font-size: 1rem;
-                font-weight: 500;
-                cursor: pointer;
-                transition: background-color 0.2s;
-            }
-            button:hover {
-                background-color: #3182ce;
-            }
-            .error-message {
-                color: #e53e3e;
-                margin-top: 0.5rem;
-                font-size: 0.875rem;
-            }
-            .success-message {
-                color: #38a169;
-                margin-top: 0.5rem;
-                font-size: 0.875rem;
-            }
-            .password-requirements {
-                font-size: 0.75rem;
-                color: #718096;
-                margin-top: 0.25rem;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>Reset Your Password</h2>
-            <div id="error-message" class="error-message"></div>
-            <div id="success-message" class="success-message"></div>
-            <form id="resetForm">
-                <input type="hidden" id="token" name="token" value="" />
-                
-                <div class="form-group">
-                    <label for="password">New Password</label>
-                    <input 
-                        type="password" 
-                        id="password" 
-                        name="password" 
-                        placeholder="Enter your new password" 
-                        required 
-                        minlength="8"
-                        pattern="^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$"
-                    />
-                    <div class="password-requirements">
-                        Must be at least 8 characters long and include uppercase, lowercase, number, and special character.
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="confirmPassword">Confirm New Password</label>
-                    <input 
-                        type="password" 
-                        id="confirmPassword" 
-                        name="confirmPassword" 
-                        placeholder="Confirm your new password" 
-                        required
-                    />
-                </div>
-                
-                <button type="submit" id="submitBtn">Reset Password</button>
-            </form>
-        </div>
-
-        <script>
-            // Extract token from URL
-            const urlParams = new URLSearchParams(window.location.search);
-            const token = urlParams.get('token');
-            
-            if (token) {
-                document.getElementById('token').value = token;
-            } else {
-                document.getElementById('error-message').textContent = 'Invalid or missing reset token';
-                document.getElementById('resetForm').style.display = 'none';
-            }
-
-            document.getElementById('resetForm').addEventListener('submit', async function(e) {
-                e.preventDefault();
-                
-                const password = document.getElementById('password').value;
-                const confirmPassword = document.getElementById('confirmPassword').value;
-                const errorMessage = document.getElementById('error-message');
-                const successMessage = document.getElementById('success-message');
-                const submitBtn = document.getElementById('submitBtn');
-                
-                // Clear previous messages
-                errorMessage.textContent = '';
-                successMessage.textContent = '';
-                
-                // Validate passwords match
-                if (password !== confirmPassword) {
-                    errorMessage.textContent = 'Passwords do not match';
-                    return;
-                }
-                
-                // Validate password strength
-                const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$/;
-                if (!passwordRegex.test(password)) {
-                    errorMessage.textContent = 'Password must be at least 8 characters long and include uppercase, lowercase, number, and special character.';
-                    return;
-                }
-                
-                try {
-                    submitBtn.disabled = true;
-                    submitBtn.textContent = 'Processing...';
-                    
-                    const response = await fetch('/api/auth/reset-password', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            token: document.getElementById('token').value,
-                            password: password,
-                            confirmPassword: confirmPassword
-                        })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (!response.ok) {
-                        throw new Error(data.message || 'Failed to reset password');
-                    }
-                    
-                    successMessage.textContent = data.message || 'Password has been reset successfully!';
-                    this.reset();
-                    
-                    // Redirect to login after 3 seconds
-                    setTimeout(() => {
-                        window.location.href = '/login';
-                    }, 3000);
-                    
-                } catch (error) {
-                    logger.error('Error:', error);
-                    errorMessage.textContent = error.message || 'An error occurred while resetting your password. Please try again.';
-                } finally {
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = 'Reset Password';
-                }
-            });
-            
-            // Real-time password matching
-            document.getElementById('confirmPassword').addEventListener('input', function() {
-                const password = document.getElementById('password').value;
-                const confirmPassword = this.value;
-                const errorMessage = document.getElementById('error-message');
-                
-                if (confirmPassword && password !== confirmPassword) {
-                    errorMessage.textContent = 'Passwords do not match';
-                } else if (errorMessage.textContent === 'Passwords do not match') {
-                    errorMessage.textContent = '';
-                }
-            });
-        </script>
-    </body>
-    </html>`;
 };
 
 // @desc    Change user password
@@ -946,18 +755,12 @@ export const changePassword = asyncHandler(async (req: AuthRequest, res: Respons
     });
   }
 
-  // Validate new password length
-  if (newPassword.length < 8) {
+  // Validate new password using validator for consistency
+  const passwordValidation = validatePassword(newPassword);
+  if (!passwordValidation.isValid) {
     return res.status(200).json({
       status: 0,
-      message: 'newPassword must be at least 8 characters long'
-    });
-  }
-
-  if (newPassword.length > 20) {
-    return res.status(200).json({
-      status: 0,
-      message: 'Password must not exceed 20 characters'
+      message: passwordValidation.message
     });
   }
 

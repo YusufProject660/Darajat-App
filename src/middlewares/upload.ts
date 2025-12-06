@@ -23,17 +23,12 @@ const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFil
   const filetypes = /jpeg|jpg|png|webp/;
   const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
   const mimetype = filetypes.test(file.mimetype);
-
-  if (mimetype && extname) {
-    return cb(null, true);
-  } else {
-    cb(new Error('Only .png, .jpg, .jpeg, and .webp formats are allowed.'));
-  }
+  if (mimetype && extname) return cb(null, true);
+  cb(new Error('Only .png, .jpg, .jpeg, and .webp formats are allowed.'));
 };
 
-// Export the configured multer instance
 export const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 4 * 1024 * 1024 } // 4MB max
+  limits: { fileSize: 2 * 1024 * 1024 } // 2MB max
 });
