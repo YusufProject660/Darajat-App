@@ -58,7 +58,6 @@ if (!email ||
     /[\s<>\[\],;:\\"]/.test(email) ||
     /@.*@/.test(email) || // More than one @
     /^[^@]+\.[^@]+\.[^@]+$/.test(email.split('@')[1]) || // More than one dot after @
-    email.split('@')[0].length > 64 ||
     email.split('@')[1].length > 255) {
   return res.status(200).json({
     status: 0,
@@ -648,6 +647,14 @@ export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Resp
     return res.status(200).json({ status: 0, message: 'At least one field (firstName, lastName, or email) is required to update profile' });
   }
 
+  // Validate firstName and lastName length (max 20 characters)
+  if (firstName && firstName.length > 20) {
+    return res.status(200).json({ status: 0, message: 'First name cannot be more than 20 characters' });
+  }
+  if (lastName && lastName.length > 20) {
+    return res.status(200).json({ status: 0, message: 'Last name cannot be more than 20 characters' });
+  }
+
   try {
     const updatedUser = await updateProfile(req.user!.id, { firstName, lastName, email });
     const { token, ...sanitizedUser } = updatedUser;
@@ -660,9 +667,16 @@ export const updateUserProfile = asyncHandler(async (req: AuthRequest, res: Resp
       lastName: sanitizedUser.lastName
     }, 'Profile updated successfully');
   } catch (error: any) {
+    // Handle AppError instances
+    if (error instanceof AppError) {
+      return res.status(200).json({ status: 0, message: error.message });
+    }
+    
+    // Handle specific error messages
     if (error.message === 'Email already in use' || error.message === 'Username already taken') {
       return res.status(200).json({ status: 0, message: error.message });
     }
+    
     return res.status(200).json({ status: 0, message: 'Failed to update profile' });
   }
 });
@@ -832,7 +846,6 @@ export const saveFirebaseUserHandler = asyncHandler(async (req: Request, res: Re
       /\s/.test(email) ||
       /[\s<>\[\],;:\\"]/.test(email) ||
       /@.*@/.test(email) ||
-      email.split('@')[0].length > 64 ||
       email.split('@')[1].length > 255
     ) {
       return res.status(200).json({

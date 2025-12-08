@@ -452,7 +452,9 @@ async function prepareQuestionLeaderboard(
   totalPlayers: number;
   answeredPlayers: number;
 }> {
-  const room = await GameRoom.findOne({ roomCode });
+  const room = await GameRoom.findOne({ roomCode })
+    .populate('players.userId', 'firstName username avatar')
+    .lean() as any;
   if (!room) {
     throw new Error('Room not found');
   }
@@ -462,16 +464,31 @@ async function prepareQuestionLeaderboard(
 
   // Create leaderboard with original order maintained
   const leaderboard = room.players.map((player: any) => {
+    // Extract playerId properly for answer matching
+    let playerIdForMatch: string;
+    if (player.userId?._id) {
+      playerIdForMatch = player.userId._id.toString();
+    } else if (player.userId?.toString) {
+      playerIdForMatch = player.userId.toString();
+    } else if (typeof player.userId === 'string') {
+      playerIdForMatch = player.userId;
+    } else {
+      playerIdForMatch = player.userId?.toString() || '';
+    }
+    
     // Find answer for this player and question
     const answer = room.answeredQuestions?.find((aq: any) =>
-      aq.playerId.toString() === player.userId.toString() &&
+      aq.playerId.toString() === playerIdForMatch &&
       aq.questionId.toString() === questionId
     );
 
+    // Get display name with firstName priority
+    const displayName = player.userId?.firstName || player.userId?.username || player.username || 'Unknown';
+
     return {
-      playerId: player.userId.toString(),
-      username: player.username,
-      avatar: player.avatar,
+      playerId: playerIdForMatch,
+      username: displayName,
+      avatar: player.avatar || player.userId?.avatar,
       hasAnswered: !!answer,
       isCorrect: answer?.isCorrect || false,
       selectedOption: answer?.selectedOption ?? null,

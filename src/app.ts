@@ -292,7 +292,7 @@ export class App {
     };
 
     this.app.use(cors(corsOptions));
-    this.app.set('trust proxy', 1);
+    this.app.set('trust proxy',1 );
     
     // Middleware to preserve empty strings in request body
     this.app.use((req, _res, next) => {
@@ -363,6 +363,13 @@ export class App {
         version: process.env.npm_package_version || '1.0.0'
       });
     });
+
+
+
+
+
+
+
 
     // Serve static files from public directory
     const publicDir = path.join(process.cwd(), 'public');

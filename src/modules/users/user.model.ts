@@ -35,18 +35,15 @@ const userSchema = new Schema<IUser>(
   {
     firstName: {
       type: String,
-      trim: true,
-      maxlength: [20, 'First name cannot be more than 20 characters']
+      trim: true
     },
     lastName: {
       type: String,
-      trim: true,
-      maxlength: [20, 'Last name cannot be more than 20 characters']
+      trim: true
     },
     username: {
       type: String,
-      trim: true,
-      maxlength: [20, 'Username cannot be more than 20 characters']
+      trim: true
     },
     email: {
       type: String,
@@ -64,8 +61,8 @@ const userSchema = new Schema<IUser>(
           
           const [localPart, domainPart] = v.split('@');
           
-          // Check local part length (1-64 chars as per RFC 5321)
-          if (localPart.length < 1 || localPart.length > 64) {
+          // Check local part minimum length
+          if (localPart.length < 1) {
             return false;
           }
           

@@ -299,13 +299,28 @@ const createGame = async (req: IGameRequest, res: Response) => {
       const populatedGame = await GameRoom.findById(saved._id)
         .populate({
           path: 'players.userId',
-          select: 'username avatar'
+          select: 'firstName username avatar'
         })
         .populate('questions')
         .lean() as any;
 
       if (populatedGame?.settings) {
         populatedGame.settings.categories = Object.fromEntries(processedCategories);
+      }
+
+      // Update players username with firstName priority
+      if (populatedGame?.players) {
+        populatedGame.players = populatedGame.players.map((p: any) => {
+          const displayName = p.userId?.firstName || p.userId?.username || p.username;
+          return {
+            ...p,
+            username: displayName,
+            userId: p.userId ? {
+              ...p.userId,
+              username: displayName
+            } : p.userId
+          };
+        });
       }
 
       // Add game details to response
@@ -425,16 +440,23 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
       console.log('📋 Active Rooms:', Array.from(userSocket.rooms));
       logger.info('✅ Socket joined room via API', { userId: userId.toString(), roomCode });
 
-      // Fetch fresh room data to ensure we have proper player structure
-      const freshRoom = await GameRoom.findOne({ roomCode: roomCode.trim().toUpperCase() }).lean() as any;
-      const hostIdForEvent = freshRoom?.hostId?.toString() || updatedRoom.hostId?.toString();
+      // Fetch fresh room data with populated userId for firstName
+      const freshRoom = await GameRoom.findOne({ roomCode: roomCode.trim().toUpperCase() })
+        .populate('players.userId', 'firstName username avatar')
+        .populate('hostId', 'firstName username avatar')
+        .lean() as any;
+      const hostIdForEvent = freshRoom?.hostId?._id?.toString() || freshRoom?.hostId?.toString() || updatedRoom.hostId?.toString();
+      
+      // Get joining player's firstName from user document
+      const joiningUser = await User.findById(userId).select('firstName username').lean() as any;
+      const joiningPlayerUsername = joiningUser?.firstName || joiningUser?.username || username;
       
       // Prepare player joined data
       const playerJoinedData = {
         player: {
           id: userId.toString(),
           userId: userId.toString(),
-          username: username,
+          username: joiningPlayerUsername,
           avatar: avatar || '',
           score: 0,
           isHost: hostIdForEvent === userId.toString()
@@ -489,10 +511,13 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
             isHost = true;
           }
           
+          // Get display name with firstName priority
+          const displayName = p.userId?.firstName || p.userId?.username || p.username || '';
+          
           return {
             id: playerUserId || p._id?.toString() || '',
             userId: playerUserId || p._id?.toString() || '', // Ensure userId is always included
-            username: p.username || '',
+            username: displayName,
             avatar: p.avatar || '',
             score: p.score || 0,
             isHost: isHost
@@ -563,7 +588,7 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
       const populatedRoom = await GameRoom.findById(updatedRoom._id)
         .populate({
           path: 'players.userId',
-          select: 'username avatar'
+          select: 'firstName username avatar'
         })
         .populate('questions')
         .lean() as any;
@@ -580,12 +605,12 @@ const joinGame = async (req: IRequestWithUser, res: Response) => {
         return {
           userId: p.userId ? {
             _id: p.userId._id?.toString() || p.userId.toString(),
-            username: p.userId.username || p.username
+            username: p.userId.firstName || p.userId.username || p.username
           } : {
             _id: p.userId?.toString() || p.userId,
             username: p.username
           },
-          username: p.username,
+          username: p.userId?.firstName || p.userId?.username || p.username,
           avatar: p.avatar || '',
           isHost: isHost || false,
           is_me: isMe,
@@ -1011,7 +1036,7 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
     const gameRoom = await GameRoom.findOne({ roomCode })
       .populate({
         path: 'players.userId',
-        select: 'username avatar'
+        select: 'firstName username avatar'
       });
 
     if (!gameRoom) {
@@ -1117,7 +1142,7 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
 
       const playerStat: PlayerStats = {
         userId: userId._id,
-        username: userId.username || 'Unknown',
+        username: (userId as any).firstName || userId.username || 'Unknown',
         avatar: userId.avatar,
         points: player.score || 0,
         accuracy,
@@ -1677,22 +1702,16 @@ const getGameLobby = async (req: IGameLobbyRequest, res: Response, next: NextFun
       return next(new AppError('You are not a member of this game', 403));
     }
 
-    const getDisplayName = (user: any) => {
-      if (user?.firstName) return user.firstName;
-      if (user?.email) return user.email.split('@')[0];
-      return user?.username || 'Unknown';
-    };
-
     const response = {
       roomCode: gameRoom.roomCode,
       status: gameRoom.status,
       host: {
         id: gameRoom.hostId?._id || gameRoom.hostId,
-        username: getDisplayName(gameRoom.hostId)
+        username: gameRoom.hostId?.firstName || gameRoom.hostId?.username || 'Unknown'
       },
       players: (gameRoom.players || []).map((player: any) => ({
         id: player.userId?._id || player.userId,
-        username: getDisplayName(player.userId) || player.username,
+        username: player.userId?.firstName || player.userId?.username || player.username,
         avatar: player.avatar,
         isHost: player.isHost,
         isReady: player.isReady,
