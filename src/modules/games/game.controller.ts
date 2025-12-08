@@ -127,12 +127,12 @@ interface IGameLobbyRequest extends Request {
   user?: IUser;
 }
 
-interface IFinishGameRequest extends Request {
+/*interface IFinishGameRequest extends Request {
   params: {
     roomCode: string;
   };
   user?: IUser;
-}
+}*/
 
 /**
  * @desc    Create a new game room
@@ -772,12 +772,12 @@ const getGameRoom = async (req: Request, res: Response, next: NextFunction) => {
 };
 
 // Leave game request interface
-interface ILeaveGameRequest extends Request {
+/*interface ILeaveGameRequest extends Request {
   body: {
     roomCode: string;
   };
   user?: IUser;
-}
+}*/
 
 interface IGetQuestionsRequest extends Request {
   params: {
@@ -1205,7 +1205,7 @@ const getGameLeaderboard = async (req: IGameLeaderboardRequest, res: Response, n
  * @route   PATCH /api/games/finish/:roomCode
  * @access  Private
  */
-const finishGame = async (req: IFinishGameRequest, res: Response) => {
+/*const finishGame = async (req: IFinishGameRequest, res: Response) => {
   const { roomCode } = req.params;
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1426,10 +1426,10 @@ const finishGame = async (req: IFinishGameRequest, res: Response) => {
     // End the session
     session.endSession();
   }
-}
+}*/
 
 // Leave game implementation
- const leaveGame = async (req: ILeaveGameRequest, res: Response) => {
+/* const leaveGame = async (req: ILeaveGameRequest, res: Response) => {
   try {
     const { roomCode } = req.body;
     const userId = req.user?._id;
@@ -1494,14 +1494,14 @@ const finishGame = async (req: IFinishGameRequest, res: Response) => {
   } catch (error) {
     return res.apiError('Failed to leave game', 'LEAVE_GAME_ERROR');
   }
-};
+};*/
 
 
 
 // @desc    Kick a player from the game
 // @route   POST /api/game/:roomCode/players/:playerId/kick
 // @access  Private (Host only)
-const kickPlayer = async (req: Request, res: Response) => {
+/*const kickPlayer = async (req: Request, res: Response) => {
   try {
     const { playerId } = req.params;
     const game = (req as any).game;
@@ -1544,7 +1544,7 @@ const kickPlayer = async (req: Request, res: Response) => {
     });
   }
 };
-
+*/
 // Joi-based validation is defined lazily inside updateGameSettings to avoid
 // loading Joi at module import time, which can cause issues in some test envs.
 
@@ -1821,7 +1821,7 @@ const getMyGames = async (req: IGetMyGamesRequest, res: Response) => {
 };
 
 // Interface for toggle ready status request
-interface IToggleReadyStatusRequest extends Request {
+/*interface IToggleReadyStatusRequest extends Request {
   params: {
     roomCode: string;
   };
@@ -1829,14 +1829,14 @@ interface IToggleReadyStatusRequest extends Request {
     isReady: boolean;
   };
   user?: IUser;
-}
+}*/
 
 /**
  * @desc    Toggle player's ready status
  * @route   PATCH /api/game/:roomCode/ready
  * @access  Private
  */
-const toggleReadyStatus = async (req: IToggleReadyStatusRequest, res: Response, next: NextFunction) => {
+/*const toggleReadyStatus = async (req: IToggleReadyStatusRequest, res: Response, next: NextFunction) => {
   try {
     const { roomCode } = req.params;
     const { isReady } = req.body;
@@ -1891,21 +1891,21 @@ const toggleReadyStatus = async (req: IToggleReadyStatusRequest, res: Response, 
     logger.error('Error in toggleReadyStatus:', error);
     next(new AppError('Failed to update ready status', 500));
   }
-};
+};*/
 
 export {
   createGame,
   getGameRoom,
   joinGame,
-  leaveGame,
+  //leaveGame,
   getQuestions,
   getGameSummary,
   getGameLeaderboard,
-  finishGame,
-  kickPlayer,
+  //finishGame,
+  //kickPlayer,
   updateGameSettings,
   getGameLobby,
-  toggleReadyStatus,
+  //toggleReadyStatus,
   getMyGames
 };
 

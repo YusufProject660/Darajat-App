@@ -41,14 +41,14 @@ import {
   joinGame, 
   getGameLobby,
   getMyGames, 
-  leaveGame,
+  //leaveGame,
   getQuestions,
   getGameSummary,
   getGameLeaderboard,
-  finishGame,
-  kickPlayer,
+  //finishGame,
+  //kickPlayer,
   updateGameSettings,
-  toggleReadyStatus
+  //toggleReadyStatus
 } from './game.controller';
 
 const router = express.Router();
@@ -93,10 +93,10 @@ router.route('/lobby/:roomCode')
  * @desc    Leave a game room
  * @access  Private
  */
-router.route('/leave')
+/*router.route('/leave')
   .post(protect, leaveGame)
   .all(methodNotAllowed);
-
+*/
 /**
  * @route   GET /api/game/questions/:roomCode
  * @desc    Get all questions for a game room
@@ -133,26 +133,26 @@ router.get('/summary/:roomCode', protect, getGameSummary);
 router.get('/my-games', protect, getMyGames);
 
 // Host-only routes
-router.patch('/finish/:roomCode', validatePatchMethod, protect, isHost, finishGame);
+//router.patch('/finish/:roomCode', validatePatchMethod, protect, isHost, finishGame);
 
 /**
  * @route   PATCH /api/game/:roomCode/ready
  * @desc    Toggle player's ready status
  * @access  Private
  */
-router.route('/:roomCode/ready')
+/*router.route('/:roomCode/ready')
   .patch(protect, (req: Request, res: Response, next: NextFunction) => {
     return toggleReadyStatus(req as any, res, next);
   })
   .all(methodNotAllowed);
-
+*/
 
 /**
  * @route   POST /api/game/:roomCode/players/:playerId/kick
  * @desc    Kick a player from the game (Host only)
  * @access  Private
  */
-router.route('/:roomCode/players/:playerId/kick')
+/*router.route('/:roomCode/players/:playerId/kick')
   .post(protect, isHost, kickPlayer)
   .all((_req: Request, res: Response) => {
     res.status(200).json({
@@ -160,7 +160,7 @@ router.route('/:roomCode/players/:playerId/kick')
       message: 'Method not allowed. Use POST for this endpoint.'
     });
   });
-
+*/
 /**
  * @route   PATCH /api/game/settings/:roomCode
  * @desc    Update game settings
